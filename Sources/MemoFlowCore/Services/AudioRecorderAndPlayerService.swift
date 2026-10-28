@@ -1,0 +1,372 @@
+import Foundation
+import AVFoundation
+
+/// 负责第②阶段（可靠本地 m4a 录音、暂停/继续、音频中断保护）与第①/④阶段（逐字稿跳转播放 + 行动证据区间切片回听）
+@MainActor
+public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
+
+    // MARK: - Published Recording State (PRD R01-R03)
+    @Published public private(set) var isRecording: Bool = false
+    @Published public private(set) var isPaused: Bool = false
+    @Published public private(set) var currentRecordingDuration: TimeInterval = 0
+    @Published public private(set) var waveformSamples: [Float] = Array(repeating: 0.08, count: 28)
+    @Published public var interruptionAlertMessage: String?
+
+    // MARK: - Published Playback State (PRD R06 & R23)
+    @Published public private(set) var playingRecordingId: UUID?
+    @Published public private(set) var isPlaying: Bool = false
+    @Published public private(set) var currentPlaybackTimeMs: Int = 0
+    @Published public private(set) var totalPlaybackDurationMs: Int = 0
+    @Published public private(set) var activeEvidenceEndMs: Int?
+
+    private var audioRecorder: AVAudioRecorder?
+    private var activeRecordingId: UUID?
+    private var activeRecordingFileName: String?
+    private var activeRecordingCreatedAt: Date?
+
+    private var audioPlayer: AVAudioPlayer?
+    private var meterTimer: Timer?
+    private var playbackTimer: Timer?
+
+    public let recordingsDirectoryURL: URL
+
+    public override init() {
+        let baseDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = baseDir.appendingPathComponent("MemoFlowRecordings", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        self.recordingsDirectoryURL = dir
+        super.init()
+        setupAudioInterruptionObservers()
+    }
+
+    public func audioFileURL(for fileName: String) -> URL {
+        recordingsDirectoryURL.appendingPathComponent(fileName)
+    }
+
+    // MARK: - Microphone Permission & Recording Lifecycle (PRD R01-R04, A01-A03, A11)
+
+    public func requestMicrophonePermission() async -> Bool {
+        #if os(iOS)
+        if #available(iOS 17.0, *) {
+            return await AVAudioApplication.requestRecordPermission()
+        } else {
+            return await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+        #else
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .authorized { return true }
+        return await AVCaptureDevice.requestAccess(for: .audio)
+        #endif
+    }
+
+    public func startRecording() async throws -> (id: UUID, fileName: String, createdAt: Date) {
+        let hasPermission = await requestMicrophonePermission()
+        guard hasPermission else {
+            throw NSError(
+                domain: "MemoFlowAudio",
+                code: 403,
+                userInfo: [NSLocalizedDescriptionKey: "未获得麦克风权限，请在系统设置中允许 MemoFlow 访问麦克风。"]
+            )
+        }
+
+        stopPlayback()
+
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        // 支持锁屏与切后台持续录音（PRD R03 & A02，需配合 Info.plist UIBackgroundModes: audio）
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setActive(true)
+        #endif
+
+        let id = UUID()
+        let createdAt = Date()
+        let fileName = "rec_\(id.uuidString).m4a"
+        let fileURL = audioFileURL(for: fileName)
+
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100.0,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+
+        let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+        recorder.isMeteringEnabled = true
+        recorder.prepareToRecord()
+
+        guard recorder.record() else {
+            throw NSError(
+                domain: "MemoFlowAudio",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "无法启动系统音频录制会话，请检查是否有其他应用独占麦克风。"]
+            )
+        }
+
+        self.audioRecorder = recorder
+        self.activeRecordingId = id
+        self.activeRecordingFileName = fileName
+        self.activeRecordingCreatedAt = createdAt
+        self.isRecording = true
+        self.isPaused = false
+        self.currentRecordingDuration = 0
+        self.interruptionAlertMessage = nil
+
+        startMeterTimer()
+        return (id, fileName, createdAt)
+    }
+
+    /// 暂停录音（PRD R02 & A03：暂停段不计入有效音频）
+    public func pauseRecording() {
+        guard isRecording, !isPaused, let recorder = audioRecorder else { return }
+        recorder.pause()
+        currentRecordingDuration = recorder.currentTime
+        isPaused = true
+    }
+
+    /// 继续录音（PRD R02 & A03）
+    public func resumeRecording() {
+        guard isRecording, isPaused, let recorder = audioRecorder else { return }
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+        recorder.record()
+        isPaused = false
+    }
+
+    /// 完成并保存本地录音（PRD R02, R04, R26：先落盘保存并返回真实时长）
+    public func finishRecording() -> (id: UUID, fileName: String, createdAt: Date, duration: TimeInterval)? {
+        guard let recorder = audioRecorder,
+              let id = activeRecordingId,
+              let fileName = activeRecordingFileName,
+              let createdAt = activeRecordingCreatedAt else {
+            return nil
+        }
+
+        let finalDuration = max(1.0, recorder.currentTime)
+        recorder.stop()
+        stopMeterTimer()
+
+        self.audioRecorder = nil
+        self.activeRecordingId = nil
+        self.activeRecordingFileName = nil
+        self.activeRecordingCreatedAt = nil
+        self.isRecording = false
+        self.isPaused = false
+        self.currentRecordingDuration = 0
+
+        return (id, fileName, createdAt, finalDuration)
+    }
+
+    /// 为测试或演示生成一段真实可播放的本地静音/轻提示音音频文件（便于无麦克风环境下验证播放器与导出）
+    public func ensurePlayableDemoAudioFile(named fileName: String, durationSeconds: Double = 15.0) -> URL {
+        let url = audioFileURL(for: fileName)
+        if FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+
+        // 生成标准单声道 16-bit PCM WAV 数据（AVAudioPlayer 原生支持直接播放与毫秒级跳转）
+        let sampleRate = 16000
+        let totalSamples = Int(Double(sampleRate) * max(2.0, durationSeconds))
+        var pcmSamples = [Int16](repeating: 0, count: totalSamples)
+        for i in 0..<totalSamples {
+            let t = Double(i) / Double(sampleRate)
+            // 柔和的 440Hz 泛音脉冲，方便回听时感知到正在播放及时间轴位置
+            let envelope = sin(t * 2.0 * .pi * 0.5) * 0.15
+            let wave = sin(t * 2.0 * .pi * 440.0) * envelope
+            pcmSamples[i] = Int16(max(-1.0, min(1.0, wave)) * 6000)
+        }
+
+        let dataSize = totalSamples * 2
+        var wavData = Data()
+        wavData.append("RIFF".data(using: .ascii)!)
+        var chunkSize = UInt32(36 + dataSize).littleEndian
+        wavData.append(Data(bytes: &chunkSize, count: 4))
+        wavData.append("WAVEfmt ".data(using: .ascii)!)
+        var subchunk1Size = UInt32(16).littleEndian
+        var audioFormat = UInt16(1).littleEndian
+        var numChannels = UInt16(1).littleEndian
+        var sampleRateLE = UInt32(sampleRate).littleEndian
+        var byteRate = UInt32(sampleRate * 2).littleEndian
+        var blockAlign = UInt16(2).littleEndian
+        var bitsPerSample = UInt16(16).littleEndian
+        wavData.append(Data(bytes: &subchunk1Size, count: 4))
+        wavData.append(Data(bytes: &audioFormat, count: 2))
+        wavData.append(Data(bytes: &numChannels, count: 2))
+        wavData.append(Data(bytes: &sampleRateLE, count: 4))
+        wavData.append(Data(bytes: &byteRate, count: 4))
+        wavData.append(Data(bytes: &blockAlign, count: 2))
+        wavData.append(Data(bytes: &bitsPerSample, count: 2))
+        wavData.append("data".data(using: .ascii)!)
+        var subchunk2Size = UInt32(dataSize).littleEndian
+        wavData.append(Data(bytes: &subchunk2Size, count: 4))
+        pcmSamples.withUnsafeBufferPointer { ptr in
+            wavData.append(UnsafeBufferPointer(
+                start: UnsafeRawPointer(ptr.baseAddress)?.assumingMemoryBound(to: UInt8.self),
+                count: dataSize
+            ))
+        }
+
+        try? wavData.write(to: url, options: .atomic)
+        return url
+    }
+
+    // MARK: - Playback & Evidence Slice Playback (PRD R06, R23, A05, A22)
+
+    /// 从指定毫秒位置开始播放（若传入 endMs，则播放到 endMs 自动暂停，实现「原话证据区间回听」）
+    public func play(recording: Recording, startMs: Int = 0, endMs: Int? = nil) {
+        let url = ensurePlayableDemoAudioFile(
+            named: recording.localAudioFileName,
+            durationSeconds: max(5.0, recording.duration)
+        )
+
+        do {
+            if playingRecordingId != recording.id || audioPlayer == nil {
+                audioPlayer?.stop()
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.prepareToPlay()
+                self.audioPlayer = player
+                self.playingRecordingId = recording.id
+                self.totalPlaybackDurationMs = Int(max(recording.duration, player.duration) * 1000)
+            }
+
+            guard let player = audioPlayer else { return }
+            let targetSeconds = max(0, min(player.duration - 0.05, Double(startMs) / 1000.0))
+            player.currentTime = targetSeconds
+            self.currentPlaybackTimeMs = Int(targetSeconds * 1000)
+            self.activeEvidenceEndMs = endMs
+            player.play()
+            self.isPlaying = true
+            startPlaybackTimer()
+        } catch {
+            self.isPlaying = false
+        }
+    }
+
+    public func togglePlayPause(for recording: Recording) {
+        if playingRecordingId == recording.id, let player = audioPlayer {
+            if player.isPlaying {
+                player.pause()
+                isPlaying = false
+                stopPlaybackTimer()
+            } else {
+                activeEvidenceEndMs = nil
+                player.play()
+                isPlaying = true
+                startPlaybackTimer()
+            }
+        } else {
+            play(recording: recording, startMs: 0, endMs: nil)
+        }
+    }
+
+    public func seek(for recording: Recording, toMs: Int) {
+        if playingRecordingId != recording.id || audioPlayer == nil {
+            play(recording: recording, startMs: toMs, endMs: nil)
+            return
+        }
+        guard let player = audioPlayer else { return }
+        let targetSeconds = max(0, min(player.duration, Double(toMs) / 1000.0))
+        player.currentTime = targetSeconds
+        currentPlaybackTimeMs = toMs
+        activeEvidenceEndMs = nil
+    }
+
+    public func stopPlayback() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        isPlaying = false
+        playingRecordingId = nil
+        currentPlaybackTimeMs = 0
+        activeEvidenceEndMs = nil
+        stopPlaybackTimer()
+    }
+
+    // MARK: - Timers & Interruption Handling (PRD 4.3 & A11)
+
+    private func startMeterTimer() {
+        stopMeterTimer()
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let recorder = self.audioRecorder, self.isRecording, !self.isPaused else { return }
+                recorder.updateMeters()
+                self.currentRecordingDuration = recorder.currentTime
+                let power = recorder.averagePower(forChannel: 0) // -160 ... 0 dB
+                let normalized = max(0.06, min(1.0, (power + 55.0) / 55.0))
+                var nextSamples = self.waveformSamples
+                if !nextSamples.isEmpty {
+                    nextSamples.removeFirst()
+                }
+                nextSamples.append(normalized)
+                self.waveformSamples = nextSamples
+            }
+        }
+    }
+
+    private func stopMeterTimer() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+    }
+
+    private func startPlaybackTimer() {
+        stopPlaybackTimer()
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let player = self.audioPlayer else { return }
+                self.currentPlaybackTimeMs = Int(player.currentTime * 1000)
+
+                // 如果正在回听某条行动的原话证据区间，到达 endMs 时自动暂停（PRD R23）
+                if let endLimit = self.activeEvidenceEndMs,
+                   self.currentPlaybackTimeMs >= endLimit {
+                    player.pause()
+                    self.isPlaying = false
+                    self.activeEvidenceEndMs = nil
+                    self.stopPlaybackTimer()
+                    return
+                }
+
+                if !player.isPlaying {
+                    self.isPlaying = false
+                    self.stopPlaybackTimer()
+                }
+            }
+        }
+    }
+
+    private func stopPlaybackTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = nil
+    }
+
+    private func setupAudioInterruptionObservers() {
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let userInfo = notification.userInfo,
+                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+                return
+            }
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                switch type {
+                case .began:
+                    self.pauseRecording()
+                    self.interruptionAlertMessage = "录音被系统音频/来电打断，已自动暂停并保护已录片段。你可以选择继续录音或直接保存。"
+                case .ended:
+                    self.interruptionAlertMessage = "音频中断已结束，点击「继续」可恢复录音，或点击「完成」安全保存已有片段。"
+                @unknown default:
+                    break
+                }
+            }
+        }
+        #endif
+    }
+}
