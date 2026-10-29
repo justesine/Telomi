@@ -8,10 +8,17 @@ import MemoFlowCore
 
 @main
 public struct MemoFlowApp: App {
-    @StateObject private var store = MemoFlowStore()
+    @StateObject private var store: MemoFlowStore
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {
+        if ProcessInfo.processInfo.arguments.contains("--preview-data") {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MemoFlowPreview-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            _store = StateObject(wrappedValue: MemoFlowStore(customStorageURL: directory.appendingPathComponent("state.json")))
+        } else {
+            _store = StateObject(wrappedValue: MemoFlowStore())
+        }
         #if os(macOS)
         DispatchQueue.main.async {
             NSApplication.shared.setActivationPolicy(.regular)

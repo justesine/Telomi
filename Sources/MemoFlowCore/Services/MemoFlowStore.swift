@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AVFoundation
 
 /// 搜索命中结果（PRD R09 & A08：按标题及逐字稿关键词检索历史记录，能看到匹配内容片段）
 public struct RecordingSearchResult: Identifiable, Equatable, Sendable {
@@ -29,6 +30,7 @@ public final class MemoFlowStore: ObservableObject {
     // MARK: - UI State
     @Published public var pendingConsentRecordingId: UUID?
     @Published public var pendingConsentMode: NoteMode = .quickNote
+    private var pendingConsentRetranscribe = false
     @Published public var lastBannerFeedback: String?
     @Published public var knowledgeStatus: String = "选择知识库并开启背景辅助后，将在本机建立索引。"
     @Published public var isRefreshingKnowledge = false
@@ -90,7 +92,10 @@ public final class MemoFlowStore: ObservableObject {
         audioService: AudioRecorderAndPlayerService? = nil,
         customStorageURL: URL? = nil
     ) {
-        let resolvedAudio = audioService ?? AudioRecorderAndPlayerService()
+        let isolatedDirectory = customStorageURL.map {
+            $0.deletingPathExtension().appendingPathExtension("recordings")
+        }
+        let resolvedAudio = audioService ?? AudioRecorderAndPlayerService(recordingsDirectory: isolatedDirectory)
         self.audioService = resolvedAudio
 
         let baseDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
@@ -102,6 +107,21 @@ public final class MemoFlowStore: ObservableObject {
         } else {
             seedPRDDefaultScenarios()
             saveToDisk()
+        }
+        if customStorageURL == nil {
+            KeychainService.shared.migrateLegacyKey(for: .asrAPIKey, endpoint: preferences.asrBaseURL)
+            KeychainService.shared.migrateLegacyKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
+        }
+        if let (journal, duration) = resolvedAudio.recoverInterruptedRecording() {
+            if !recordings.contains(where: { $0.id == journal.id }) {
+                var recovered = Recording(id: journal.id, title: "已恢复的中断录音", createdAt: journal.createdAt,
+                    duration: duration, localAudioFileName: journal.fileName,
+                    audioInterruptionNote: "上次录音未正常结束，已恢复可读取的音频。请回听核查。")
+                recovered.marks = journal.marks
+                recordings.insert(recovered, at: 0)
+            }
+            if saveToDisk() { resolvedAudio.acknowledgeSavedRecording(id: journal.id) }
+            lastBannerFeedback = "已恢复上次中断的录音，等待你回听与处理。"
         }
     }
 
@@ -147,19 +167,19 @@ public final class MemoFlowStore: ObservableObject {
     // MARK: - Search & Date Filtering (PRD V1.2 UI-001, UI-002, UI-003)
 
     public func searchRecordings(query: String, on date: Date? = nil) -> [RecordingSearchResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseList: [Recording]
-        if let targetDate = date {
+        if trimmed.isEmpty, let targetDate = date {
             baseList = recordings.filter { Calendar.current.isDate($0.createdAt, inSameDayAs: targetDate) }
         } else {
             baseList = recordings
         }
 
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return baseList.map { RecordingSearchResult(recording: $0, matchedSegmentSnippet: nil, matchedSegmentStartMs: nil) }
         }
 
-        return baseList.compactMap { rec in
+        return baseList.compactMap { rec -> RecordingSearchResult? in
             let titleMatch = rec.title.localizedCaseInsensitiveContains(trimmed)
             let segs = segmentsByRecording[rec.id] ?? []
             let matchedSeg = segs.first { seg in
@@ -167,14 +187,23 @@ public final class MemoFlowStore: ObservableObject {
                 (seg.speakerName?.localizedCaseInsensitiveContains(trimmed) ?? false)
             }
             let note = notesByRecording[rec.id]
-            let rev = revisionsByNote[note?.id ?? UUID()]?.last
-            let summaryMatch = rev?.content.summaryOrShortNote.localizedCaseInsensitiveContains(trimmed) ?? false
+            let rev = currentRevision(for: rec.id)
+            let content = rev?.content
+            var fields: [String] = [note?.projectName ?? ""]
+            fields += (rec.marks ?? []).map { "\($0.quote) \($0.note)" }
+            if let content {
+                fields += [content.suggestedTitle, content.summaryOrShortNote]
+                fields += content.backgroundPoints + content.keyPoints + content.decisions
+                fields += content.chapters.map { "\($0.title) \($0.summary)" }
+            }
+            let noteText = fields.joined(separator: "\n")
+            let summaryMatch = noteText.localizedCaseInsensitiveContains(trimmed)
 
             if titleMatch || matchedSeg != nil || summaryMatch {
                 let snippet = matchedSeg.map {
                     let spk = $0.speakerName.map { "\($0): " } ?? ""
                     return "[\($0.formattedStartTime)] \(spk)\($0.text)"
-                } ?? rev.map { "AI 笔记: \($0.content.summaryOrShortNote)" }
+                } ?? (summaryMatch ? "笔记：\(noteText.components(separatedBy: "\n").first(where: { $0.localizedCaseInsensitiveContains(trimmed) }) ?? "")" : nil)
                 return RecordingSearchResult(
                     recording: rec,
                     matchedSegmentSnippet: snippet,
@@ -213,8 +242,9 @@ public final class MemoFlowStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
 
         for i in 0..<segs.count {
-            if segs[i].speakerId == speakerId {
+            if segs[i].speakerId == speakerId || "segment:\(segs[i].id)" == speakerId {
                 segs[i].speakerName = trimmed
+                if segs[i].speakerId == nil { segs[i].speakerId = speakerId }
             }
         }
         segmentsByRecording[recordingId] = segs
@@ -243,7 +273,7 @@ public final class MemoFlowStore: ObservableObject {
             featureDescription: description
         )
         saveToDisk()
-        lastBannerFeedback = "已成功录入个人声纹档案，新录音将自动标记「我」的发言。"
+        lastBannerFeedback = "档案信息已保存；当前版本尚未接入自动语音身份识别，请人工确认说话人。"
     }
 
     /// 删除个人声纹档案（AI-001）
@@ -261,13 +291,15 @@ public final class MemoFlowStore: ObservableObject {
         createdAt: Date,
         duration: TimeInterval,
         selectedMode: NoteMode,
-        isNetworkAvailable: Bool = true
+        isNetworkAvailable: Bool = true,
+        marks: [RecordingMark] = []
     ) {
+        guard !recordings.contains(where: { $0.id == id }) else { return }
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd HH:mm"
         let defaultTitle = "\(selectedMode.displayTitle) \(formatter.string(from: createdAt))"
 
-        let newRecording = Recording(
+        var newRecording = Recording(
             id: id,
             title: defaultTitle,
             createdAt: createdAt,
@@ -278,10 +310,12 @@ public final class MemoFlowStore: ObservableObject {
             processingStatus: .savedPendingTranscription
         )
 
+        newRecording.marks = marks
         recordings.insert(newRecording, at: 0)
         preferences.defaultNoteMode = selectedMode
         lastBannerFeedback = "已安全保存本地音频（\(TimeFormatting.formatDuration(duration))）"
-        saveToDisk()
+        guard saveToDisk() else { return }
+        audioService.acknowledgeSavedRecording(id: id)
 
         guard isNetworkAvailable else {
             // PRD 4.2 & A01：无网时保留待转写状态，不丢音频
@@ -290,7 +324,7 @@ public final class MemoFlowStore: ObservableObject {
         }
 
         // 检查云处理授权偏好（PRD R12 & A28）
-        if preferences.asrEngineMode == .appleOnDevice && (KeychainService.shared.readKey(for: .llmAPIKey) ?? "").isEmpty {
+        if preferences.asrEngineMode == .appleOnDevice && (KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty {
             // 纯本地模式无需上传云端
             Task {
                 await runProcessingPipeline(for: id, mode: selectedMode)
@@ -314,9 +348,10 @@ public final class MemoFlowStore: ObservableObject {
 
         if let pendingId = pendingConsentRecordingId {
             let mode = pendingConsentMode
+            let retranscribe = pendingConsentRetranscribe
             pendingConsentRecordingId = nil
             Task {
-                await runProcessingPipeline(for: pendingId, mode: mode)
+                await runProcessingPipeline(for: pendingId, mode: mode, forceRetranscribe: retranscribe, cloudConsentGranted: true)
             }
         }
     }
@@ -330,16 +365,27 @@ public final class MemoFlowStore: ObservableObject {
     public func runProcessingPipeline(
         for recordingId: UUID,
         mode: NoteMode,
-        forceRetranscribe: Bool = false
+        forceRetranscribe: Bool = false,
+        cloudConsentGranted: Bool = false
     ) async {
         guard let idx = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
-        let recording = recordings[idx]
+        var recording = recordings[idx]
+        let needsCloud = preferences.asrEngineMode != .appleOnDevice ||
+            !(KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty
+        if needsCloud && !cloudConsentGranted && !processingConsent.canAutoProcessWithoutPrompt {
+            pendingConsentRecordingId = recordingId
+            pendingConsentMode = mode
+            pendingConsentRetranscribe = forceRetranscribe
+            return
+        }
 
         // 避免快速多次点击触发重复竞争任务
         if activePipelineRecordingIds.contains(recordingId) {
             return
         }
         activePipelineRecordingIds.insert(recordingId)
+        let pipelinePreferences = preferences
+        let consentAtStart = processingConsent
         defer {
             activePipelineRecordingIds.remove(recordingId)
         }
@@ -357,14 +403,29 @@ public final class MemoFlowStore: ObservableObject {
         do {
             // 阶段 ③：转写（若已有逐字稿且未指定强制重新转写，则跳过重传音频）
             var segments = forceRetranscribe ? [] : (segmentsByRecording[recordingId] ?? [])
+            if !segments.isEmpty {
+                guard let source = recording.transcriptSource,
+                      source.fileName == recording.localAudioFileName,
+                      try AudioSourceValidation.fingerprint(audioService.audioFileURL(for: source.fileName)) == source.sha256 else {
+                    throw ProcessingPipelineError.audioProcessingFailed("现有逐字稿缺少可核验的音频来源，或原文件已变化。请使用「重新转写逐字稿」")
+                }
+            }
             if segments.isEmpty {
                 updateRecordingStatus(recordingId, status: .transcribing, failureReason: nil)
                 let fileURL = audioService.audioFileURL(for: recording.localAudioFileName)
-                let asrKey = KeychainService.shared.readKey(for: .asrAPIKey)
+                try AudioSourceValidation.validateMapping(fileURL: fileURL, recording: recording)
+                guard recordings.filter({ $0.localAudioFileName == recording.localAudioFileName }).count == 1 else {
+                    throw ProcessingPipelineError.audioProcessingFailed("多条记录共用同一音频文件，请先核查映射")
+                }
+                let fingerprint = try AudioSourceValidation.fingerprint(fileURL)
+                let duration = try await AVURLAsset(url: fileURL).load(.duration).seconds
+                guard duration.isFinite, duration > 0 else { throw ProcessingPipelineError.audioProcessingFailed("原音频时长无效") }
+                recording.duration = duration
+                let asrKey = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: preferences.asrBaseURL)
                 var rawSegments = try await ASRAndLLMService.shared.transcribeAudio(
                     fileURL: fileURL,
                     recording: recording,
-                    preferences: preferences,
+                    preferences: pipelinePreferences,
                     apiKey: asrKey
                 )
                 // 赋予说话人分离标签与电影角色昵称主题（PRD V1.2 AI-001, AI-002, AI-003）
@@ -373,27 +434,59 @@ public final class MemoFlowStore: ObservableObject {
                     theme: preferences.speakerNicknameTheme,
                     userVoiceProfile: preferences.userVoiceProfile
                 )
+                try Task.checkCancellation()
+                guard pipelinePreferences == preferences,
+                      let currentIndex = recordings.firstIndex(where: { $0.id == recordingId }),
+                      recordings[currentIndex].localAudioFileName == recording.localAudioFileName,
+                      try AudioSourceValidation.fingerprint(fileURL) == fingerprint else {
+                    throw ProcessingPipelineError.audioProcessingFailed("原音频或记录在处理期间发生变化，未替换原稿")
+                }
+                try AudioSourceValidation.validateSegments(rawSegments, recording: recording)
+                if let previous = segmentsByRecording[recordingId], !previous.isEmpty {
+                    let directory = persistenceURL.deletingLastPathComponent().appendingPathComponent("MemoFlowTranscriptHistory")
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    let archive = directory.appendingPathComponent("\(recordingId)-\(UUID().uuidString).json")
+                    try JSONEncoder().encode(previous).write(to: archive, options: .atomic)
+                }
                 segments = rawSegments
                 segmentsByRecording[recordingId] = segments
+                recordings[currentIndex].duration = duration
+                recordings[currentIndex].transcriptSource = TranscriptSource(fileName: recording.localAudioFileName,
+                    sha256: fingerprint, audioDuration: duration,
+                    engine: preferences.asrEngineMode == .appleOnDevice ? "Apple Speech · on-device" : preferences.asrModelName,
+                    completedAt: Date())
+                saveToDisk()
             }
 
             // 阶段 ④：AI 整理与有证据的行动提取
+            guard pipelinePreferences == preferences, consentAtStart == processingConsent,
+                  recordings.contains(where: { $0.id == recordingId }) else {
+                throw ProcessingPipelineError.audioProcessingFailed("设置、授权或记录已变化，处理已停止。请重新开始")
+            }
             updateRecordingStatus(recordingId, status: .organizing, failureReason: nil)
             let revisionId = UUID()
-            let llmKey = KeychainService.shared.readKey(for: .llmAPIKey)
+            let llmKey = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
             let knowledgePreferences = preferences
             let references = (llmKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? [] : await knowledgeContext(query: segments.map(\.text).joined(separator: "\n"))
             let permittedReferences = knowledgePreferences == preferences && preferences.knowledgeContextEnabled ? references : []
+            guard pipelinePreferences == preferences, consentAtStart == processingConsent else {
+                throw ProcessingPipelineError.audioProcessingFailed("服务配置或授权已变化，未发送逐字稿")
+            }
             let output = try await ASRAndLLMService.shared.organizeTranscript(
                 recording: recording,
                 segments: segments,
                 requestedMode: mode,
                 revisionId: revisionId,
-                preferences: preferences,
+                preferences: pipelinePreferences,
                 llmAPIKey: llmKey,
                 knowledgeReferences: permittedReferences
             )
+
+            guard pipelinePreferences == preferences, consentAtStart == processingConsent,
+                  recordings.contains(where: { $0.id == recordingId }) else {
+                throw ProcessingPipelineError.audioProcessingFailed("设置、授权或记录已变化，未应用 AI 结果")
+            }
 
             applyOrganizationOutput(
                 output,
@@ -810,6 +903,24 @@ public final class MemoFlowStore: ObservableObject {
 
     // MARK: - Delete Recording (PRD R04, 4.7, A10, A18)
 
+    public func setHighlight(recordingId: UUID, segment: TranscriptSegment, note: String?) {
+        guard segment.recordingId == recordingId,
+              let index = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        var marks = recordings[index].marks ?? []
+        marks.removeAll { $0.kind == "highlight" && $0.startMs == segment.startMs && $0.quote == segment.text }
+        if let note {
+            marks.append(RecordingMark(startMs: segment.startMs, endMs: segment.endMs, quote: segment.text, note: note, kind: "highlight"))
+        }
+        recordings[index].marks = marks
+        saveToDisk()
+    }
+
+    public func removeMark(recordingId: UUID, markId: UUID) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        recordings[index].marks?.removeAll { $0.id == markId }
+        saveToDisk()
+    }
+
     /// 删除录音及本地关联数据，但不默认删除已创建的外部日历事件或提醒事项（PRD 4.7 & A18）
     public func deleteRecording(_ recordingId: UUID) {
         if audioService.playingRecordingId == recordingId {
@@ -988,7 +1099,8 @@ public final class MemoFlowStore: ObservableObject {
         }
     }
 
-    public func saveToDisk() {
+    @discardableResult
+    public func saveToDisk() -> Bool {
         let snap = PersistedSnapshot(
             recordings: recordings,
             segmentsByRecording: segmentsByRecording,
@@ -1003,8 +1115,13 @@ public final class MemoFlowStore: ObservableObject {
             processingJobsByRecording: processingJobsByRecording,
             preferences: preferences
         )
-        if let data = try? JSONEncoder().encode(snap) {
-            try? data.write(to: persistenceURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(snap)
+            try data.write(to: persistenceURL, options: .atomic)
+            return true
+        } catch {
+            lastBannerFeedback = "保存记录失败：\(error.localizedDescription)。原音频保留，请释放空间后重试。"
+            return false
         }
     }
 

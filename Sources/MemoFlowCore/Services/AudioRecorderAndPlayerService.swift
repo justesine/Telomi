@@ -11,6 +11,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     @Published public private(set) var currentRecordingDuration: TimeInterval = 0
     @Published public private(set) var waveformSamples: [Float] = Array(repeating: 0.08, count: 28)
     @Published public var interruptionAlertMessage: String?
+    @Published public private(set) var recordingBookmarks: [RecordingMark] = []
 
     // MARK: - Published Playback State (PRD R06 & R23)
     @Published public private(set) var playingRecordingId: UUID?
@@ -27,13 +28,54 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private var meterTimer: Timer?
     private var playbackTimer: Timer?
+    private var interruptionObservers: [NSObjectProtocol] = []
+    private var mediaServicesWereReset = false
+
+    public struct RecordingJournal: Codable {
+        public let id: UUID
+        public let fileName: String
+        public let createdAt: Date
+        public var marks: [RecordingMark]?
+    }
+    private var journalURL: URL { recordingsDirectoryURL.appendingPathComponent("active-recording.json") }
+
+    public func addRecordingBookmark() {
+        guard isRecording, let recorder = audioRecorder,
+              let data = try? Data(contentsOf: journalURL),
+              var journal = try? JSONDecoder().decode(RecordingJournal.self, from: data) else { return }
+        let mark = RecordingMark(startMs: Int(max(0, recorder.currentTime) * 1000))
+        journal.marks = recordingBookmarks + [mark]
+        do {
+            try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+            recordingBookmarks.append(mark)
+        } catch { interruptionAlertMessage = "书签保存失败：\(error.localizedDescription)" }
+    }
+
+    /// A journal survives process termination; audio is never deleted during recovery.
+    public func recoverInterruptedRecording() -> (RecordingJournal, TimeInterval)? {
+        guard !isRecording, let data = try? Data(contentsOf: journalURL),
+              let journal = try? JSONDecoder().decode(RecordingJournal.self, from: data) else { return nil }
+        let url = audioFileURL(for: journal.fileName)
+        guard journal.fileName == "rec_\(journal.id.uuidString).m4a",
+              let player = try? AVAudioPlayer(contentsOf: url), player.duration > 0 else {
+            interruptionAlertMessage = "发现未完成录音，原文件已保留，但暂时无法读取。请保留文件以便恢复。"
+            return nil
+        }
+        return (journal, player.duration)
+    }
+
+    public func acknowledgeSavedRecording(id: UUID) {
+        guard let data = try? Data(contentsOf: journalURL),
+              let journal = try? JSONDecoder().decode(RecordingJournal.self, from: data), journal.id == id else { return }
+        try? FileManager.default.removeItem(at: journalURL)
+    }
 
     public let recordingsDirectoryURL: URL
 
-    public override init() {
+    public init(recordingsDirectory: URL? = nil) {
         let baseDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let dir = baseDir.appendingPathComponent("MemoFlowRecordings", isDirectory: true)
+        let dir = recordingsDirectory ?? baseDir.appendingPathComponent("MemoFlowRecordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.recordingsDirectoryURL = dir
         super.init()
@@ -65,6 +107,10 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     }
 
     public func startRecording() async throws -> (id: UUID, fileName: String, createdAt: Date) {
+        guard !isRecording, !FileManager.default.fileExists(atPath: journalURL.path) else {
+            throw NSError(domain: "MemoFlowAudio", code: 409,
+                userInfo: [NSLocalizedDescriptionKey: "请先保存或恢复上一段录音，再开始新录音。"])
+        }
         let hasPermission = await requestMicrophonePermission()
         guard hasPermission else {
             throw NSError(
@@ -96,8 +142,19 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         ]
 
         let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+        recorder.delegate = self
         recorder.isMeteringEnabled = true
-        recorder.prepareToRecord()
+        guard recorder.prepareToRecord() else {
+            throw NSError(domain: "MemoFlowAudio", code: 500, userInfo: [NSLocalizedDescriptionKey: "无法创建录音文件"])
+        }
+        #if os(iOS)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUnlessOpen], ofItemAtPath: fileURL.path)
+        #endif
+        let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt)
+        try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+        #if os(iOS)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: journalURL.path)
+        #endif
 
         guard recorder.record() else {
             throw NSError(
@@ -115,6 +172,8 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         self.isPaused = false
         self.currentRecordingDuration = 0
         self.interruptionAlertMessage = nil
+        self.mediaServicesWereReset = false
+        self.recordingBookmarks = []
 
         startMeterTimer()
         return (id, fileName, createdAt)
@@ -131,11 +190,23 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     /// 继续录音（PRD R02 & A03）
     public func resumeRecording() {
         guard isRecording, isPaused, let recorder = audioRecorder else { return }
+        guard !mediaServicesWereReset else {
+            interruptionAlertMessage = "系统音频服务已重置，请先完成保存，再开始新录音。"
+            return
+        }
+        do {
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        try AVAudioSession.sharedInstance().setActive(true)
         #endif
-        recorder.record()
+        guard recorder.record() else {
+            interruptionAlertMessage = "无法恢复麦克风，录音仍暂停。请重试或保存已有片段。"
+            return
+        }
         isPaused = false
+        interruptionAlertMessage = nil
+        } catch {
+            interruptionAlertMessage = "恢复录音失败：\(error.localizedDescription)。已录片段保留。"
+        }
     }
 
     /// 完成并保存本地录音（PRD R02, R04, R26：先落盘保存并返回真实时长）
@@ -147,8 +218,9 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             return nil
         }
 
-        let finalDuration = max(1.0, recorder.currentTime)
+        let measuredDuration = max(currentRecordingDuration, recorder.currentTime)
         recorder.stop()
+        let finalDuration = (try? AVAudioPlayer(contentsOf: recorder.url).duration) ?? measuredDuration
         stopMeterTimer()
 
         self.audioRecorder = nil
@@ -158,6 +230,9 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         self.isRecording = false
         self.isPaused = false
         self.currentRecordingDuration = 0
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
 
         return (id, fileName, createdAt, finalDuration)
     }
@@ -293,6 +368,11 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let recorder = self.audioRecorder, self.isRecording, !self.isPaused else { return }
+                guard recorder.isRecording else {
+                    self.isPaused = true
+                    self.interruptionAlertMessage = "录音已停止接收声音，请继续录音或保存已有片段。"
+                    return
+                }
                 recorder.updateMeters()
                 self.currentRecordingDuration = recorder.currentTime
                 let power = recorder.averagePower(forChannel: 0) // -160 ... 0 dB
@@ -344,7 +424,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
 
     private func setupAudioInterruptionObservers() {
         #if os(iOS)
-        NotificationCenter.default.addObserver(
+        interruptionObservers.append(NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
             queue: .main
@@ -366,7 +446,50 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
                     break
                 }
             }
-        }
+        })
+        interruptionObservers.append(NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            guard reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                self.pauseRecording()
+                self.interruptionAlertMessage = "麦克风或耳机已断开，录音已暂停。确认输入设备后可继续。"
+            }
+        })
+        interruptionObservers.append(NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                self.mediaServicesWereReset = true
+                self.pauseRecording()
+                self.interruptionAlertMessage = "系统音频服务已重置，请先保存已有录音，再开始新录音。"
+            }
+        })
         #endif
+    }
+
+    deinit {
+        interruptionObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+}
+
+extension AudioRecorderAndPlayerService: AVAudioRecorderDelegate {
+    nonisolated public func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isRecording, self.audioRecorder === recorder else { return }
+            self.isPaused = true
+            self.interruptionAlertMessage = "录音会话已结束，请保存已有片段。"
+        }
+    }
+
+    nonisolated public func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isRecording, self.audioRecorder === recorder else { return }
+            self.pauseRecording()
+            self.interruptionAlertMessage = "录音写入中断，原文件保留：\(error?.localizedDescription ?? "未知音频错误")"
+        }
     }
 }

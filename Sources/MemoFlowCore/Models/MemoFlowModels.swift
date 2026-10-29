@@ -239,6 +239,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
     public var processingStatus: RecordingProcessingStatus
     public var failureReason: String?
     public var audioInterruptionNote: String?
+    public var transcriptSource: TranscriptSource?
+    public var marks: [RecordingMark]?
 
     public init(
         id: UUID = UUID(),
@@ -279,6 +281,7 @@ public struct TranscriptSegment: Identifiable, Codable, Equatable, Sendable {
     public var speakerId: String?
     /// 说话人名称或电影角色昵称（如 "我"、"Dustin"、"Cooper" 或用户自定义姓名）
     public var speakerName: String?
+    public var timingIsEstimated: Bool?
 
     public init(
         id: String = UUID().uuidString,
@@ -287,7 +290,8 @@ public struct TranscriptSegment: Identifiable, Codable, Equatable, Sendable {
         endMs: Int,
         text: String,
         speakerId: String? = nil,
-        speakerName: String? = nil
+        speakerName: String? = nil,
+        timingIsEstimated: Bool? = nil
     ) {
         self.id = id
         self.recordingId = recordingId
@@ -296,6 +300,7 @@ public struct TranscriptSegment: Identifiable, Codable, Equatable, Sendable {
         self.text = text
         self.speakerId = speakerId
         self.speakerName = speakerName
+        self.timingIsEstimated = timingIsEstimated
     }
 
     public var effectiveSpeakerDisplay: String {
@@ -314,6 +319,32 @@ public struct TranscriptSegment: Identifiable, Codable, Equatable, Sendable {
 
     public var formattedTimeRange: String {
         "\(TimeFormatting.formatMilliseconds(startMs)) - \(TimeFormatting.formatMilliseconds(endMs))"
+    }
+}
+
+public struct TranscriptSource: Codable, Equatable, Sendable {
+    public var fileName: String
+    public var sha256: String
+    public var audioDuration: TimeInterval
+    public var engine: String
+    public var completedAt: Date
+}
+
+public struct RecordingMark: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID = UUID()
+    public var startMs: Int
+    public var endMs: Int?
+    public var quote: String
+    public var note: String
+    public var kind: String
+    public var createdAt: Date = Date()
+
+    public init(startMs: Int, endMs: Int? = nil, quote: String = "", note: String = "", kind: String = "bookmark") {
+        self.startMs = startMs
+        self.endMs = endMs
+        self.quote = quote
+        self.note = note
+        self.kind = kind
     }
 }
 

@@ -101,6 +101,9 @@ public struct RecordingDetailView: View {
                             } label: {
                                 Label("导出 Markdown", systemImage: "square.and.arrow.up")
                             }
+                            ShareLink(item: MarkdownExporterService.renderTranscript(recording: rec, segments: segments)) {
+                                Label("导出逐字稿与标记", systemImage: "text.document")
+                            }
                         } label: {
                             Image(systemName: "ellipsis.circle")
                         }
@@ -141,7 +144,7 @@ public struct RecordingDetailView: View {
                         newSpeakerNameInput = ""
                     }
                 } message: {
-                    Text("将统一更新该说话人在本录音所有发言片段中的昵称，并同步更新关联的待办负责人。")
+                    Text("已有说话人标识时更新同组昵称；未识别说话人时只标记当前段落。")
                 }
                 .onAppear {
                     if let jumpMs = initialJumpMs {
@@ -344,13 +347,12 @@ public struct RecordingDetailView: View {
                         Circle()
                             .fill(
                                 LinearGradient(
-                                    colors: [MFTheme.iceCyan, MFTheme.iceBlue],
+                                    colors: [MFTheme.paperBorder, MFTheme.paperBorder],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )
                             )
                             .frame(width: 40, height: 40)
-                            .shadow(color: MFTheme.iceBlue.opacity(0.35), radius: 8, x: 0, y: 2)
                         Image(systemName: (isThisPlaying && audioService.isPlaying) ? "pause.fill" : "play.fill")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Color(red: 0.05, green: 0.08, blue: 0.14))
@@ -672,6 +674,36 @@ public struct RecordingDetailView: View {
         let playMs = audioService.currentPlaybackTimeMs
 
         VStack(alignment: .leading, spacing: 10) {
+            if rec.transcriptSource == nil && !segments.isEmpty {
+                Text("这份历史逐字稿尚无音频来源校验记录，请回听核对；重新转写成功前会保留原稿。")
+                    .font(.caption).foregroundStyle(MFTheme.warmAmber)
+            }
+            if segments.contains(where: { $0.timingIsEstimated == true }) {
+                Text("带「约」的时间为文本分配的估计位置，需回听确认。")
+                    .font(.caption).foregroundStyle(MFTheme.textSecondary)
+            }
+            if !(rec.marks ?? []).isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("书签与批注").font(.headline)
+                    ForEach(rec.marks ?? []) { mark in
+                        HStack(alignment: .top) {
+                            Button {
+                                audioService.play(recording: rec, startMs: mark.startMs)
+                            } label: {
+                                Label(TimeFormatting.formatMilliseconds(mark.startMs), systemImage: "bookmark")
+                            }.buttonStyle(.plain)
+                            VStack(alignment: .leading) {
+                                if !mark.quote.isEmpty { Text(mark.quote).textSelection(.enabled) }
+                                if !mark.note.isEmpty { Text(mark.note).foregroundStyle(MFTheme.textSecondary) }
+                            }
+                            Spacer()
+                            Button("删除", role: .destructive) { store.removeMark(recordingId: rec.id, markId: mark.id) }
+                                .buttonStyle(.plain)
+                        }.font(.caption)
+                    }
+                }.padding(.vertical, 8)
+                Divider()
+            }
             HStack {
                 Text("点击段落时间戳即可跳到对应录音位置回听 · 点击说话人可重命名")
                     .font(.caption)
@@ -698,6 +730,7 @@ public struct RecordingDetailView: View {
 
             ForEach(segments) { seg in
                 let isCurrentSegment = isPlayingThis && playMs >= seg.startMs && playMs <= seg.endMs
+                let highlight = (rec.marks ?? []).first { $0.kind == "highlight" && $0.startMs == seg.startMs && $0.quote == seg.text }
                 let speakerDisplayName = seg.speakerName ?? seg.speakerId ?? "发言人"
                 let isMe = (speakerDisplayName == "我")
 
@@ -705,7 +738,7 @@ public struct RecordingDetailView: View {
                     HStack(spacing: 8) {
                         // 说话人昵称标签（点击可人工纠偏，AI-002）
                         Button {
-                            editingSpeakerId = seg.speakerId ?? speakerDisplayName
+                            editingSpeakerId = seg.speakerId ?? "segment:\(seg.id)"
                             newSpeakerNameInput = speakerDisplayName
                         } label: {
                             HStack(spacing: 4) {
@@ -737,7 +770,7 @@ public struct RecordingDetailView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "play.circle.fill")
                                     .font(.system(size: 9))
-                                Text(seg.formattedStartTime)
+                                Text((seg.timingIsEstimated == true ? "约 " : "") + seg.formattedStartTime)
                                     .font(.caption2.monospacedDigit().weight(.semibold))
                             }
                             .padding(.horizontal, 6)
@@ -751,6 +784,11 @@ public struct RecordingDetailView: View {
                         .buttonStyle(.plain)
 
                         Spacer()
+                        Button {
+                            store.setHighlight(recordingId: rec.id, segment: seg, note: highlight == nil ? "" : nil)
+                        } label: {
+                            Label(highlight == nil ? "高亮" : "取消高亮", systemImage: highlight == nil ? "highlighter" : "highlighter.fill")
+                        }.buttonStyle(.plain).font(.caption)
                     }
 
                     // 段落正文（点击从头播放该句）
@@ -758,16 +796,24 @@ public struct RecordingDetailView: View {
                         audioService.play(recording: rec, startMs: seg.startMs, endMs: nil)
                     } label: {
                         Text(seg.text)
-                            .font(.subheadline)
+                            .font(.system(.body, design: .serif))
+                            .lineSpacing(6)
                             .foregroundStyle(MFTheme.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    if let highlight {
+                        TextField("添加批注", text: Binding(
+                            get: { highlight.note },
+                            set: { store.setHighlight(recordingId: rec.id, segment: seg, note: $0) }
+                        ), axis: .vertical)
+                        .textFieldStyle(.plain).font(.callout)
+                    }
                 }
                 .mfGlassCard(
                     cornerRadius: 12,
                     padding: 12,
-                    tint: isCurrentSegment ? MFTheme.iceCyan : nil
+                    tint: highlight != nil ? MFTheme.warmAmber : (isCurrentSegment ? MFTheme.iceCyan : nil)
                 )
             }
         }

@@ -94,6 +94,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
 
 public enum LLMProviderOption: String, CaseIterable, Identifiable {
     case deepSeek = "deepseek"
+    case qwen, doubao, glm, kimi, minimax, qianfan
     case siliconFlow = "siliconflow"
     case openAI = "openai"
     case localRules = "local_rules"
@@ -104,6 +105,12 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     public var title: String {
         switch self {
         case .deepSeek: return "DeepSeek"
+        case .qwen: return "通义千问 Qwen"
+        case .doubao: return "豆包 · 火山方舟"
+        case .glm: return "智谱 GLM"
+        case .kimi: return "Kimi · 月之暗面"
+        case .minimax: return "MiniMax"
+        case .qianfan: return "百度千帆"
         case .siliconFlow: return "硅基流动"
         case .openAI: return "OpenAI"
         case .localRules: return "本地规则引擎"
@@ -114,6 +121,8 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     public var badge: String {
         switch self {
         case .deepSeek: return "中文推理极佳"
+        case .qwen, .glm, .kimi, .minimax, .qianfan: return "文本整理 · 需 API Key"
+        case .doubao: return "填写模型或接入点 ID"
         case .siliconFlow: return "可与语音共用 Key"
         case .openAI: return "GPT-4.1 / o4 系列"
         case .localRules: return "免 Key · 离线"
@@ -124,6 +133,7 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     public var iconName: String {
         switch self {
         case .deepSeek: return "brain.head.profile"
+        case .qwen, .doubao, .glm, .kimi, .minimax, .qianfan: return "text.bubble"
         case .siliconFlow: return "cpu.fill"
         case .openAI: return "sparkle.magnifyingglass"
         case .localRules: return "internaldrive.fill"
@@ -134,6 +144,12 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     public var baseURL: String {
         switch self {
         case .deepSeek: return "https://api.deepseek.com/v1"
+        case .qwen: return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        case .doubao: return "https://ark.cn-beijing.volces.com/api/v3"
+        case .glm: return "https://open.bigmodel.cn/api/paas/v4"
+        case .kimi: return "https://api.moonshot.cn/v1"
+        case .minimax: return "https://api.minimaxi.com/v1"
+        case .qianfan: return "https://qianfan.baidubce.com/v2"
         case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .openAI: return "https://api.openai.com/v1"
         case .localRules: return ""
@@ -143,6 +159,8 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
 
     public var presetModels: [(id: String, label: String)] {
         switch self {
+        case .qwen: return [("qwen-plus", "qwen-plus")]
+        case .doubao, .glm, .kimi, .minimax, .qianfan: return []
         case .deepSeek:
             return [
                 ("deepseek-chat", "DeepSeek-V3 最新版（官方自动指向最新 V3 权重）"),
@@ -241,6 +259,14 @@ public struct SettingsView: View {
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
         .onAppear {
             loadCurrentSelectionState()
+        }
+        .onChange(of: store.preferences.llmBaseURL) { _, endpoint in
+            llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: endpoint) ?? ""
+            store.revokeCloudProcessingConsent()
+        }
+        .onChange(of: store.preferences.asrBaseURL) { _, endpoint in
+            asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: endpoint) ?? ""
+            store.revokeCloudProcessingConsent()
         }
         .fileImporter(isPresented: $choosingVault, allowedContentTypes: [.folder]) { result in
             switch result {
@@ -459,6 +485,15 @@ public struct SettingsView: View {
             }
 
             // 预置模型 + 动态拉取/自定义模型单选列表
+            if selectedLLMProvider.requiresAPIKey {
+                Text("LLM 只接收文字并整理笔记；语音转文字由上方 ASR 单独处理。更换服务商后需重新授权云处理。")
+                    .font(.caption).foregroundStyle(MFTheme.textSecondary)
+                TextField("模型 ID 或推理接入点 ID（以服务商控制台为准）", text: $store.preferences.llmModelName)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: store.preferences.llmModelName) { _, _ in store.saveToDisk() }
+                TextField("LLM 服务地址（与 API Key 地域一致）", text: $store.preferences.llmBaseURL)
+                    .textFieldStyle(.roundedBorder)
+            }
             if selectedLLMProvider != .custom {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -567,7 +602,7 @@ public struct SettingsView: View {
 
             // 昵称主题切换
             VStack(alignment: .leading, spacing: 6) {
-                Text("电影/剧集匿名昵称主题（会议录音自动按发言顺序分配，不猜测真实姓名）")
+                Text("电影/剧集昵称主题（仅对服务商返回的说话人标识分配昵称；未识别时可人工标记）")
                     .font(.caption)
                     .foregroundStyle(MFTheme.textSecondary)
 
@@ -608,12 +643,12 @@ public struct SettingsView: View {
             // 个人声纹档案（AI-001：识别我的声音）
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("识别我的声音（个人声纹档案）", systemImage: "waveform.badge.mic")
+                    Label("个人声音档案 · 身份识别待接入", systemImage: "waveform.badge.mic")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(MFTheme.textPrimary)
                     Spacer()
                     if store.preferences.userVoiceProfile != nil {
-                        MFBadgePill("已录入声纹档案", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                        MFBadgePill("已保留历史档案", color: MFTheme.textSecondary, icon: "person")
                     } else {
                         MFBadgePill("未录入声纹", color: MFTheme.warmAmber)
                     }
@@ -633,6 +668,7 @@ public struct SettingsView: View {
                         Button("重新录入") {
                             store.enrollVoiceProfile(sampleDuration: 6.0, description: "已更新个人声纹特征档案")
                         }
+                        .disabled(true)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(MFTheme.iceCyan)
                         .buttonStyle(.plain)
@@ -648,13 +684,14 @@ public struct SettingsView: View {
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                 } else {
                     HStack {
-                        Text("录入 6 秒语音样本建立声纹档案，新录音将自动识别并在逐字稿中标记为「我」。")
+                        Text("当前版本尚无声纹匹配引擎。可在逐字稿中手动设置昵称或「我」；不会根据发言顺序猜测身份。")
                             .font(.caption2)
                             .foregroundStyle(MFTheme.textSecondary)
                         Spacer()
                         MFLuminousActionButton("录入我的声音", icon: "mic.fill", tint: MFTheme.mintGreen) {
                             store.enrollVoiceProfile(sampleDuration: 6.0, description: "已录入个人声纹特征档案（高置信度）")
                         }
+                        .disabled(true)
                     }
                     .padding(10)
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
@@ -1168,6 +1205,7 @@ public struct SettingsView: View {
     // MARK: - Selection Logic & Persistence
 
     private func selectASRProvider(_ option: ASRProviderOption) {
+        guard option != selectedASRProvider else { return }
         selectedASRProvider = option
         if option == .appleLocal {
             store.preferences.asrEngineMode = .appleOnDevice
@@ -1180,28 +1218,34 @@ public struct SettingsView: View {
                 store.preferences.asrModelName = firstModel
             }
         }
+        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
         autoSaveKeys()
     }
 
     private func selectLLMProvider(_ option: LLMProviderOption) {
+        guard option != selectedLLMProvider else { return }
         selectedLLMProvider = option
         if option == .localRules {
             llmAPIKeyInput = ""
-            KeychainService.shared.deleteKey(for: .llmAPIKey)
+            store.preferences.llmBaseURL = ""
+            store.preferences.llmModelName = "local-heuristic"
         } else {
             if !option.baseURL.isEmpty {
                 store.preferences.llmBaseURL = option.baseURL
             }
             if let firstModel = option.presetModels.first?.id {
                 store.preferences.llmModelName = firstModel
+            } else {
+                store.preferences.llmModelName = ""
             }
         }
+        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
         autoSaveKeys()
     }
 
     private func loadCurrentSelectionState() {
-        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey) ?? ""
-        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey) ?? ""
+        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
+        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
 
         if store.preferences.asrEngineMode == .appleOnDevice {
             selectedASRProvider = .appleLocal
@@ -1215,27 +1259,25 @@ public struct SettingsView: View {
             selectedASRProvider = .custom
         }
 
-        if store.preferences.llmBaseURL.contains("deepseek.com") {
-            selectedLLMProvider = .deepSeek
-        } else if store.preferences.llmBaseURL.contains("siliconflow") {
-            selectedLLMProvider = .siliconFlow
-        } else if store.preferences.llmBaseURL.contains("openai.com") {
-            selectedLLMProvider = .openAI
-        } else {
-            selectedLLMProvider = .deepSeek
-        }
+        selectedLLMProvider = store.preferences.llmModelName == "local-heuristic" ? .localRules :
+            (LLMProviderOption.allCases.first { !$0.baseURL.isEmpty && $0.baseURL == store.preferences.llmBaseURL } ?? .custom)
 
         refreshContainers()
     }
 
     private func autoSaveKeys() {
-        KeychainService.shared.saveKey(asrAPIKeyInput, for: .asrAPIKey)
+        let asrSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .asrAPIKey, endpoint: store.preferences.asrBaseURL)
+        let llmSaved: Bool
         if selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow && shareSiliconFlowKey {
-            KeychainService.shared.saveKey(asrAPIKeyInput, for: .llmAPIKey)
+            llmSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
         } else if selectedLLMProvider == .localRules {
-            KeychainService.shared.deleteKey(for: .llmAPIKey)
+            llmSaved = true
         } else {
-            KeychainService.shared.saveKey(llmAPIKeyInput, for: .llmAPIKey)
+            llmSaved = KeychainService.shared.saveKey(llmAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
+        }
+        guard asrSaved && llmSaved else {
+            store.lastBannerFeedback = "API Key 保存失败，请检查系统钥匙串权限后重试。"
+            return
         }
         store.saveToDisk()
         withAnimation {

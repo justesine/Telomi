@@ -162,19 +162,20 @@ public final class KeychainService: Sendable {
     public init() {}
 
     @discardableResult
-    public func saveKey(_ value: String, for account: AccountKey) -> Bool {
+    public func saveKey(_ value: String, for account: AccountKey, endpoint: String? = nil) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
-            deleteKey(for: account)
-            return true
+            return deleteKey(for: account, endpoint: endpoint)
         }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account.rawValue
+            kSecAttrAccount as String: credentialAccount(account, endpoint: endpoint)
         ]
-        SecItemDelete(query as CFDictionary)
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if update == errSecSuccess { return true }
+        guard update == errSecItemNotFound else { return false }
 
         var addQuery = query
         addQuery[kSecValueData as String] = data
@@ -184,11 +185,11 @@ public final class KeychainService: Sendable {
         return status == errSecSuccess
     }
 
-    public func readKey(for account: AccountKey) -> String? {
+    public func readKey(for account: AccountKey, endpoint: String? = nil) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account.rawValue,
+            kSecAttrAccount as String: credentialAccount(account, endpoint: endpoint),
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -204,13 +205,30 @@ public final class KeychainService: Sendable {
     }
 
     @discardableResult
-    public func deleteKey(for account: AccountKey) -> Bool {
+    public func deleteKey(for account: AccountKey, endpoint: String? = nil) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account.rawValue
+            kSecAttrAccount as String: credentialAccount(account, endpoint: endpoint)
         ]
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    func credentialAccount(_ account: AccountKey, endpoint: String?) -> String {
+        guard let endpoint else { return account.rawValue }
+        let normalized = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        return "\(account.rawValue):\(normalized)"
+    }
+
+    /// Bind an old unscoped key only once, to the endpoint already saved by the user.
+    public func migrateLegacyKey(for account: AccountKey, endpoint: String) {
+        let marker = "legacy-migration-completed"
+        guard readKey(for: account, endpoint: marker) == nil else { return }
+        if let key = readKey(for: account), readKey(for: account, endpoint: endpoint) == nil {
+            guard saveKey(key, for: account, endpoint: endpoint) else { return }
+        }
+        _ = saveKey("done", for: account, endpoint: marker)
     }
 }

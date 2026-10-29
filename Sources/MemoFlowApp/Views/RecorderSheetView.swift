@@ -31,6 +31,15 @@ public struct RecorderSheetView: View {
                 Spacer(minLength: 10)
                 studioWaveformStage
                 alertSection
+                if audioService.isRecording {
+                    Button {
+                        audioService.addRecordingBookmark()
+                    } label: {
+                        Label("记下这一刻 · \(audioService.recordingBookmarks.count)", systemImage: "bookmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint("在当前录音位置保存时间戳书签")
+                }
                 Spacer(minLength: 10)
                 offlineSimToggle
                 controlButtons
@@ -297,7 +306,8 @@ public struct RecorderSheetView: View {
             createdAt: result.createdAt,
             duration: result.duration,
             selectedMode: selectedMode,
-            isNetworkAvailable: !simulateOfflineSave
+            isNetworkAvailable: !simulateOfflineSave,
+            marks: audioService.recordingBookmarks
         )
         dismiss()
     }
@@ -333,7 +343,7 @@ public struct CloudConsentSheetView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(MFTheme.mintGreen)
 
-                    Text("• 服务方：\(store.processingConsent.provider)\n• 处理目的：\(store.processingConsent.purpose)\n• 隐私边界：未经你的确认，不会自动写入 Apple 日历或提醒事项；录音不会用于模型训练。")
+                    Text("• 音频转写：\(store.preferences.asrEngineMode == .appleOnDevice ? "仅本机 Apple Speech" : store.preferences.asrBaseURL)\n• 文字整理：\(store.preferences.llmBaseURL.isEmpty ? "本地规则" : store.preferences.llmBaseURL)\n• 用途：转写录音、整理笔记与行动候选。云服务的数据保留和训练政策以各服务商条款为准；日历写入遵循你设置的审核模式。")
                         .font(.footnote)
                         .foregroundStyle(MFTheme.textSecondary)
                 }

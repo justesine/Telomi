@@ -1,5 +1,26 @@
 import Foundation
 
+extension MarkdownExporterService {
+    public static func renderTranscript(recording: Recording, segments: [TranscriptSegment]) -> String {
+        var lines = ["# \(recording.title)", "", "录音 ID：\(recording.id.uuidString)",
+            "音频文件：\(recording.localAudioFileName)", ""]
+        if let source = recording.transcriptSource {
+            lines += ["音频 SHA-256：\(source.sha256)", "转写引擎：\(source.engine)", ""]
+        } else { lines += ["历史逐字稿未校验音频来源，请回听核查。", ""] }
+        lines += ["## 书签与批注", ""]
+        for mark in recording.marks ?? [] {
+            lines.append("- [\(TimeFormatting.formatMilliseconds(mark.startMs))] \(mark.quote)")
+            if !mark.note.isEmpty { lines.append("  批注：\(mark.note)") }
+        }
+        lines += ["", "## 逐字稿", ""]
+        for segment in segments {
+            let estimated = segment.timingIsEstimated == true ? "约 " : ""
+            lines += ["[\(estimated)\(segment.formattedTimeRange)] \(segment.effectiveSpeakerDisplay)：\(segment.text)", ""]
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// 负责生成结构清晰、层次分明的 Obsidian 兼容 Markdown（包含总结、待办与日程、录音章节、逐字稿，且严格遵守 PRD 第 07 节与 R25 规范）
 public enum MarkdownExporterService {
 

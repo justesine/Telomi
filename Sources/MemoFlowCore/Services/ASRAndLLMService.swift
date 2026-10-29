@@ -1,6 +1,85 @@
 import Foundation
 import Speech
 import AVFoundation
+import CryptoKit
+
+/// One terminal result for success, error, timeout and cancellation, including
+/// cancellation before continuation/task installation. Never call Speech under the lock.
+final class SpeechRequestCompletion<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Value, Error>?
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var cleanup: [() -> Void] = []
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
+        lock.lock()
+        if let result {
+            lock.unlock()
+            continuation.resume(with: result)
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func onFinish(_ action: @escaping () -> Void) {
+        lock.lock()
+        if result != nil {
+            lock.unlock()
+            action()
+        } else {
+            cleanup.append(action)
+            lock.unlock()
+        }
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        lock.lock()
+        guard self.result == nil else { lock.unlock(); return }
+        self.result = result
+        let continuation = self.continuation
+        self.continuation = nil
+        let actions = cleanup
+        cleanup.removeAll()
+        lock.unlock()
+        actions.forEach { $0() }
+        continuation?.resume(with: result)
+    }
+}
+
+public enum AudioSourceValidation {
+    public static func validateMapping(fileURL: URL, recording: Recording) throws {
+        let name = recording.localAudioFileName
+        guard !name.isEmpty, name == fileURL.lastPathComponent,
+              !name.contains("/"), name != ".", name != ".." else {
+            throw ProcessingPipelineError.audioProcessingFailed("录音与文件路径不匹配")
+        }
+        if name.hasPrefix("rec_"),
+           fileURL.deletingPathExtension().lastPathComponent != "rec_\(recording.id.uuidString)" {
+            throw ProcessingPipelineError.audioProcessingFailed("录音 ID 与原音频文件名不匹配，请先核查数据")
+        }
+    }
+
+    public static func fingerprint(_ url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var hash = SHA256()
+        while let data = try file.read(upToCount: 1_048_576), !data.isEmpty { hash.update(data: data) }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func validateSegments(_ segments: [TranscriptSegment], recording: Recording) throws {
+        guard recording.duration.isFinite, recording.duration > 0,
+              !segments.isEmpty, Set(segments.map(\.id)).count == segments.count,
+              segments.allSatisfy({
+                  $0.recordingId == recording.id && $0.startMs >= 0 && $0.endMs > $0.startMs &&
+                  $0.endMs <= Int(ceil(recording.duration * 1000)) + 1 && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              }) else {
+            throw ProcessingPipelineError.audioProcessingFailed("逐字稿来源或时间戳校验失败，未替换原稿")
+        }
+    }
+}
 
 public enum ProcessingPipelineError: LocalizedError {
     case missingAPIKey(String)
@@ -37,6 +116,24 @@ public final class ASRAndLLMService: Sendable {
 
     public init() {}
 
+    public static func endpoint(baseURL: String, path: String) throws -> URL {
+        let base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        guard let url = URL(string: base + "/" + path), let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              url.scheme == "https" || (url.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(host)) else {
+            throw ProcessingPipelineError.networkFailure("服务地址需为 HTTPS（本机服务可用 HTTP），且不能包含密钥或查询参数")
+        }
+        return url
+    }
+
+    public static func chunkRanges(duration: Double) throws -> [Range<Double>] {
+        guard duration.isFinite, duration > 0, duration < 7 * 24 * 3600 else {
+            throw ProcessingPipelineError.audioProcessingFailed("音频时长无效或超过支持范围")
+        }
+        return stride(from: 0.0, to: duration, by: 45.0).map { $0..<min(duration, $0 + 45) }
+    }
+
     // MARK: - Stage ③: ASR Transcription (OpenAI-Compatible + Apple On-Device)
 
     public func transcribeAudio(
@@ -48,22 +145,46 @@ public final class ASRAndLLMService: Sendable {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw ProcessingPipelineError.audioFileNotFound(recording.localAudioFileName)
         }
+        try AudioSourceValidation.validateMapping(fileURL: fileURL, recording: recording)
+        try Task.checkCancellation()
+        let duration = try await AVURLAsset(url: fileURL).load(.duration).seconds
+        guard duration.isFinite, duration > 0 else {
+            throw ProcessingPipelineError.audioProcessingFailed("无法读取原音频时长")
+        }
+        var source = recording
+        source.duration = duration
 
         switch preferences.asrEngineMode {
         case .appleOnDevice:
-            return try await transcribeWithAppleSpeech(fileURL: fileURL, recording: recording, preferences: preferences)
+            return try await transcribeWithAppleSpeech(fileURL: fileURL, recording: source, preferences: preferences)
         case .openAICompatible:
             let key = (apiKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else {
                 throw ProcessingPipelineError.missingAPIKey("语音转写 (ASR)")
             }
-            return try await transcribeWithOpenAICompatibleAPI(
-                fileURL: fileURL,
-                recording: recording,
-                baseURL: preferences.asrBaseURL,
-                modelName: preferences.asrModelName,
-                apiKey: key
-            )
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mf_cloud_\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            var result: [TranscriptSegment] = []
+            for range in try Self.chunkRanges(duration: duration) {
+                let start = range.lowerBound
+                try Task.checkCancellation()
+                var chunk = source
+                chunk.duration = range.upperBound - start
+                let url = directory.appendingPathComponent("chunk.m4a")
+                try await sliceAudioFile(sourceURL: fileURL, startTime: start, duration: chunk.duration, destinationURL: url)
+                var segments = try await transcribeWithOpenAICompatibleAPI(fileURL: url, recording: chunk,
+                    baseURL: preferences.asrBaseURL, modelName: preferences.asrModelName, apiKey: key)
+                for index in segments.indices {
+                    segments[index].startMs += Int(start * 1000)
+                    segments[index].endMs += Int(start * 1000)
+                    segments[index].id = UUID().uuidString
+                }
+                result.append(contentsOf: segments)
+                try FileManager.default.removeItem(at: url)
+            }
+            try AudioSourceValidation.validateSegments(result, recording: source)
+            return result
         }
     }
 
@@ -74,10 +195,7 @@ public final class ASRAndLLMService: Sendable {
         modelName: String,
         apiKey: String
     ) async throws -> [TranscriptSegment] {
-        let cleanBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
-        guard let endpoint = URL(string: "\(cleanBase)/audio/transcriptions") else {
-            throw ProcessingPipelineError.networkFailure("ASR Base URL 格式无效：\(baseURL)")
-        }
+        let endpoint = try Self.endpoint(baseURL: baseURL, path: "audio/transcriptions")
 
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: endpoint)
@@ -146,11 +264,15 @@ public final class ASRAndLLMService: Sendable {
 
         // 1. 若返回了带时间戳的 segments（如 OpenAI / Groq Whisper verbose_json）
         if let rawSegments = decoded.segments, !rawSegments.isEmpty {
-            let mapped = rawSegments.enumerated().compactMap { index, seg -> TranscriptSegment? in
+            let mapped = try rawSegments.enumerated().compactMap { index, seg -> TranscriptSegment? in
                 let trimmed = (seg.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return nil }
-                let startMs = Int((seg.start ?? 0) * 1000)
-                let endMs = max(startMs + 500, Int((seg.end ?? Double(startMs / 1000 + 2)) * 1000))
+                guard let start = seg.start, let end = seg.end, start.isFinite, end.isFinite,
+                      start >= 0, end > start, start < totalDuration, end <= totalDuration + 0.25 else {
+                    throw ProcessingPipelineError.audioProcessingFailed("ASR 返回无效时间戳")
+                }
+                let startMs = Int(start * 1000)
+                let endMs = min(Int(totalDuration * 1000), Int(end * 1000))
                 return TranscriptSegment(
                     id: String(format: "seg_%02d", index + 1),
                     recordingId: recordingId,
@@ -173,7 +295,7 @@ public final class ASRAndLLMService: Sendable {
         return splitTextIntoProportionalSegments(
             fullText: fullText,
             recordingId: recordingId,
-            totalDuration: max(3.0, totalDuration)
+            totalDuration: totalDuration
         )
     }
 
@@ -202,22 +324,23 @@ public final class ASRAndLLMService: Sendable {
         }
 
         let totalChars = max(1, sentences.reduce(0) { $0 + $1.count })
-        let totalMs = Int(max(Double(sentences.count * 2), totalDuration) * 1000)
+        let totalMs = max(1, Int(totalDuration * 1000))
         var currentMs = 0
         var result: [TranscriptSegment] = []
 
         for (idx, sentence) in sentences.enumerated() {
             let ratio = Double(sentence.count) / Double(totalChars)
-            let spanMs = max(1200, Int(Double(totalMs) * ratio))
+            let spanMs = max(1, Int(Double(totalMs) * ratio))
             let startMs = baseOffsetMs + currentMs
-            let endMs = baseOffsetMs + ((idx == sentences.count - 1) ? max(currentMs + 1000, totalMs) : min(totalMs, currentMs + spanMs))
+            let endMs = baseOffsetMs + ((idx == sentences.count - 1) ? totalMs : min(totalMs, currentMs + spanMs))
             result.append(
                 TranscriptSegment(
                     id: String(format: "seg_%02d", idx + 1),
                     recordingId: recordingId,
                     startMs: startMs,
                     endMs: endMs,
-                    text: sentence
+                    text: sentence,
+                    timingIsEstimated: true
                 )
             )
             currentMs = min(totalMs, currentMs + spanMs)
@@ -237,19 +360,23 @@ public final class ASRAndLLMService: Sendable {
         var assignedNames: [String: String] = [:]
         var usedNicknames = Set<String>()
         let availableNicknames = theme.defaultNicknames
-        let hasUserVoice = (userVoiceProfile != nil)
         var result: [TranscriptSegment] = []
 
-        for (idx, seg) in segments.enumerated() {
+        for seg in segments {
             var copy = seg
-            let rawSpeakerId = seg.speakerId ?? (idx % 3 == 0 ? "spk_0" : (idx % 3 == 1 ? "spk_1" : "spk_2"))
-            copy.speakerId = rawSpeakerId
+            // Nicknames describe actual provider speaker IDs; a voice sample alone
+            // is not voice identification, and segment order is not diarization.
+            guard let rawSpeakerId = seg.speakerId, !rawSpeakerId.isEmpty else {
+                result.append(copy)
+                continue
+            }
+            if let name = seg.speakerName, !name.isEmpty { result.append(copy); continue }
 
             if let existing = assignedNames[rawSpeakerId] {
                 copy.speakerName = existing
             } else {
                 let nameToAssign: String
-                if hasUserVoice && (rawSpeakerId == "spk_0" || rawSpeakerId == "me") {
+                if rawSpeakerId == "me" {
                     nameToAssign = "我"
                 } else {
                     let nextNickname = availableNicknames.first(where: { !usedNicknames.contains($0) })
@@ -268,72 +395,6 @@ public final class ASRAndLLMService: Sendable {
 
     // MARK: - Safe Apple Speech Recognition & Smart Chunking (BUG-001 & BUG-002 Fix)
 
-    /// 保证单个 SFSpeechRecognitionTask 终态只被 resume 一次的高并发安全解析器（彻底根除 BUG-001）
-    private final class SafeSpeechRecognitionResolver: @unchecked Sendable {
-        private let lock = NSLock()
-        private var isResolved = false
-        private var continuation: CheckedContinuation<SFSpeechRecognitionResult?, Error>?
-        private var task: SFSpeechRecognitionTask?
-
-        init(continuation: CheckedContinuation<SFSpeechRecognitionResult?, Error>) {
-            self.continuation = continuation
-        }
-
-        func attachTask(_ task: SFSpeechRecognitionTask) {
-            lock.lock()
-            defer { lock.unlock() }
-            self.task = task
-            if isResolved {
-                task.cancel()
-            }
-        }
-
-        func resume(returning value: SFSpeechRecognitionResult?) {
-            lock.lock()
-            guard !isResolved else {
-                lock.unlock()
-                return
-            }
-            isResolved = true
-            let cont = continuation
-            continuation = nil
-            let t = task
-            lock.unlock()
-            t?.finish()
-            cont?.resume(returning: value)
-        }
-
-        func resume(throwing error: Error) {
-            lock.lock()
-            guard !isResolved else {
-                lock.unlock()
-                return
-            }
-            isResolved = true
-            let cont = continuation
-            continuation = nil
-            let t = task
-            lock.unlock()
-            t?.cancel()
-            cont?.resume(throwing: error)
-        }
-
-        func cancel() {
-            lock.lock()
-            guard !isResolved else {
-                lock.unlock()
-                return
-            }
-            isResolved = true
-            let cont = continuation
-            continuation = nil
-            let t = task
-            lock.unlock()
-            t?.cancel()
-            cont?.resume(returning: nil)
-        }
-    }
-
     /// 利用 AVAssetExportSession 快速导出音频指定时间切片（毫秒级、无损/低损）
     private func sliceAudioFile(
         sourceURL: URL,
@@ -342,13 +403,11 @@ public final class ASRAndLLMService: Sendable {
         destinationURL: URL
     ) async throws {
         let asset = AVURLAsset(url: sourceURL)
-        let isWav = sourceURL.pathExtension.lowercased() == "wav"
-        let preset = isWav ? AVAssetExportPresetPassthrough : AVAssetExportPresetAppleM4A
-        guard let session = AVAssetExportSession(asset: asset, presetName: preset) ?? AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
             throw ProcessingPipelineError.audioProcessingFailed("无法初始化音频切片导出任务")
         }
         session.outputURL = destinationURL
-        session.outputFileType = isWav ? .wav : .m4a
+        session.outputFileType = .m4a
         session.timeRange = CMTimeRange(
             start: CMTime(seconds: startTime, preferredTimescale: 600),
             duration: CMTime(seconds: duration, preferredTimescale: 600)
@@ -440,12 +499,7 @@ public final class ASRAndLLMService: Sendable {
 
     /// 构建领域词汇与项目关键词列表（PRD 方案二优化：提升专有名词与行业术语召回率）
     private func buildContextualStrings(preferences: MemoFlowPreferences?) -> [String] {
-        var terms: Set<String> = [
-            "视频企划", "视频制作", "TV", "集数", "纪录片", "剧集", "番剧",
-            "分镜", "脚本", "排期", "预算", "消耗", "积分", "特斯拉",
-            "鬼灭", "鬼灭集", "鬼灭之刃", "对标", "复盘", "交叉验证",
-            "会议记", "待办", "日程", "需求", "大纲", "镜头"
-        ]
+        var terms: Set<String> = []
 
         if let prefs = preferences {
             for proj in prefs.knownProjectNames {
@@ -474,36 +528,29 @@ public final class ASRAndLLMService: Sendable {
     ) async throws -> SFSpeechRecognitionResult? {
         let request = SFSpeechURLRecognitionRequest(url: chunkURL)
         request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true
         if !contextualStrings.isEmpty {
             request.contextualStrings = contextualStrings
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let resolver = SafeSpeechRecognitionResolver(continuation: continuation)
-
-            let task = recognizer.recognitionTask(with: request) { res, error in
-                if let error = error {
-                    let nsError = error as NSError
-                    // 忽略静音段、文件尾部自然关闭、取消或端侧无语音报错 (1700, 216, 203)
-                    if nsError.domain == "kAFAssistantErrorDomain" || nsError.code == 216 || nsError.code == 1700 || nsError.code == 203 {
-                        resolver.resume(returning: nil)
-                    } else {
-                        resolver.resume(throwing: ProcessingPipelineError.networkFailure(error.localizedDescription))
-                    }
-                    return
+        let resolver = SpeechRequestCompletion<SFSpeechRecognitionResult?>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard resolver.install(continuation) else { return }
+                let watchdog = DispatchWorkItem {
+                    resolver.resolve(.failure(ProcessingPipelineError.audioProcessingFailed("语音识别超时；本段未完成，请重试")))
                 }
-                if let res = res, res.isFinal {
-                    resolver.resume(returning: res)
+                resolver.onFinish { watchdog.cancel() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: watchdog)
+                let task = recognizer.recognitionTask(with: request) { result, error in
+                    // A final result wins when Apple provides it together with a trailing error.
+                    if let result, result.isFinal { resolver.resolve(.success(result)) }
+                    else if let error { resolver.resolve(.failure(error)) }
                 }
+                resolver.onFinish { task.cancel() }
             }
-
-            resolver.attachTask(task)
-
-            // 看门狗超时保护，防止 Apple Speech 在异常长音频无声段挂起
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
-                resolver.cancel()
-            }
+        } onCancel: {
+            resolver.resolve(.failure(CancellationError()))
         }
     }
 
@@ -548,13 +595,12 @@ public final class ASRAndLLMService: Sendable {
             guard let first = group.first, let last = group.last else { return nil }
             let text = group.map(\.substring).joined().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
+            guard first.timestamp.isFinite, last.timestamp.isFinite, last.duration.isFinite,
+                  first.timestamp >= 0, first.timestamp < chunkDuration else { return nil }
             let startMs = Int((chunkBaseOffsetSec + first.timestamp) * 1000)
-
-            // 防御性保护：按字数与实际声学时长进行合理上限约束，防止单个 token 跨越数秒静音拉伸
-            let rawDurationSec = (last.timestamp + last.duration) - first.timestamp
-            let reasonableMaxDurationSec = max(0.8, Double(text.count) * 0.8)
-            let effectiveDurationSec = min(rawDurationSec, max(reasonableMaxDurationSec, 1.2))
-            let endMs = max(startMs + 600, Int((chunkBaseOffsetSec + first.timestamp + effectiveDurationSec) * 1000))
+            let endMs = min(Int((chunkBaseOffsetSec + chunkDuration) * 1000),
+                max(startMs + 1, Int((chunkBaseOffsetSec + last.timestamp + last.duration) * 1000)))
+            guard endMs > startMs else { return nil }
 
             return TranscriptSegment(
                 id: UUID().uuidString,
@@ -584,6 +630,9 @@ public final class ASRAndLLMService: Sendable {
         guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
             throw ProcessingPipelineError.networkFailure("当前设备端侧语音识别器不可用")
         }
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw ProcessingPipelineError.audioProcessingFailed("此设备或语言尚不支持端侧识别。请安装系统语言资源，或在授权后选择云端 ASR")
+        }
 
         // 探测音频真实精确时长
         let asset = AVURLAsset(url: fileURL)
@@ -595,7 +644,7 @@ public final class ASRAndLLMService: Sendable {
             detectedDuration = recording.duration
         }
 
-        let chunkLength: Double = 90.0
+        let chunkLength: Double = 45.0
         let contextualStrings = buildContextualStrings(preferences: preferences)
 
         if detectedDuration <= chunkLength {
@@ -620,7 +669,8 @@ public final class ASRAndLLMService: Sendable {
         }
 
         // 长音频（如 49 分 10 秒、60 分钟、90 分钟）：切片分块识别（彻底解决 BUG-002 截断与伪时间戳）
-        let numChunks = Int(ceil(detectedDuration / chunkLength))
+        let ranges = try Self.chunkRanges(duration: detectedDuration)
+        let numChunks = ranges.count
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mf_chunks_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer {
@@ -629,13 +679,13 @@ public final class ASRAndLLMService: Sendable {
 
         var allSegments: [TranscriptSegment] = []
 
-        for i in 0..<numChunks {
-            let chunkStart = Double(i) * chunkLength
-            let chunkDuration = min(chunkLength, detectedDuration - chunkStart)
-            guard chunkDuration > 0.5 else { continue }
+        for (i, range) in ranges.enumerated() {
+            try Task.checkCancellation()
+            let chunkStart = range.lowerBound
+            let chunkDuration = range.upperBound - chunkStart
+            guard chunkDuration > 0 else { continue }
 
-            let ext = fileURL.pathExtension.isEmpty ? "m4a" : fileURL.pathExtension
-            let chunkURL = tempDir.appendingPathComponent("slice_\(i).\(ext)")
+            let chunkURL = tempDir.appendingPathComponent("slice_\(i).m4a")
             let normURL = tempDir.appendingPathComponent("norm_\(i).wav")
 
             do {
@@ -664,8 +714,8 @@ public final class ASRAndLLMService: Sendable {
                     allSegments.append(contentsOf: segs)
                 }
             } catch {
-                // 单个分片识别异常不导致整体闪退，安全记录并继续下一个切片
-                print("MemoFlow: 切片 #\(i) 转写提示: \(error.localizedDescription)")
+                if error is CancellationError { throw error }
+                throw ProcessingPipelineError.audioProcessingFailed("第 \(i + 1)/\(numChunks) 段（\(TimeFormatting.formatDuration(chunkStart))）未完成：\(error.localizedDescription)。未替换原逐字稿")
             }
 
             try? FileManager.default.removeItem(at: chunkURL)
@@ -739,11 +789,9 @@ public final class ASRAndLLMService: Sendable {
         apiKey: String,
         knowledgeReferences: [KnowledgeReference]
     ) async throws -> OrganizationOutput {
-        let cleanBase = preferences.llmBaseURL
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
-        guard let endpoint = URL(string: "\(cleanBase)/chat/completions") else {
-            throw ProcessingPipelineError.networkFailure("LLM Base URL 格式无效：\(preferences.llmBaseURL)")
+        let endpoint = try Self.endpoint(baseURL: preferences.llmBaseURL, path: "chat/completions")
+        guard !preferences.llmModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ProcessingPipelineError.networkFailure("请在设置中填写当前 LLM 的模型或接入点 ID")
         }
 
         let isoFormatter = ISO8601DateFormatter()
@@ -813,15 +861,17 @@ public final class ASRAndLLMService: Sendable {
         \(numberedTranscript)
         """
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": preferences.llmModelName,
             "temperature": 0.1,
-            "response_format": ["type": "json_object"],
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": userPrompt]
             ]
         ]
+        if ["api.deepseek.com", "api.openai.com", "api.siliconflow.cn"].contains(endpoint.host ?? "") {
+            payload["response_format"] = ["type": "json_object"]
+        }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -1177,11 +1227,7 @@ public final class ASRAndLLMService: Sendable {
         apiKey: String,
         category: ModelDiscoveryCategory
     ) async throws -> [String] {
-        let cleanBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
-        guard let url = URL(string: "\(cleanBase)/models") else {
-            throw ProcessingPipelineError.networkFailure("Base URL 无效：\(baseURL)")
-        }
+        let url = try Self.endpoint(baseURL: baseURL, path: "models")
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

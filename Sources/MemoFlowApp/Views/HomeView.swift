@@ -241,7 +241,7 @@ public struct HomeView: View {
                 Text("全局记忆搜索中")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(MFTheme.textPrimary)
-                Text("正在跨所有历史日期检索录音标题、逐字稿原话与 AI 总结")
+                Text("检索所有日期的录音、逐字稿、笔记与批注")
                     .font(.system(size: 11))
                     .foregroundStyle(MFTheme.textSecondary)
             }

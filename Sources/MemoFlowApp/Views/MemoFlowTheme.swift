@@ -167,7 +167,7 @@ public enum MFTheme {
     // MARK: - Gradients
     public static var cardSurfaceGradient: LinearGradient {
         LinearGradient(
-            colors: [cardBgTop, cardBgBottom],
+            colors: [cardBgTop, cardBgTop],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -187,7 +187,7 @@ public enum MFTheme {
     public static var ambientTopGlow: RadialGradient {
         RadialGradient(
             colors: [
-                iceBlue.opacity(0.06),
+                Color.clear,
                 Color.clear
             ],
             center: .top,
@@ -206,7 +206,7 @@ public struct MFGlassCardModifier: ViewModifier {
 
     public func body(content: Content) -> some View {
         let isLight = (MFTheme.activeTheme == .warmPaper)
-        let shadowColor = isLight ? Color.black.opacity(0.04) : Color.black.opacity(0.32)
+        let shadowColor = Color.clear
         let shadowRadius: CGFloat = isLight ? 6 : 12
         let shadowY: CGFloat = isLight ? 2 : 5
 
@@ -320,7 +320,6 @@ public struct MFLuminousActionButton: View {
                         .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.7)
                 }
             )
-            .shadow(color: tint.opacity(0.22), radius: 6, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

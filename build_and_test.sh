@@ -1,63 +1,16 @@
 #!/bin/zsh
 set -euo pipefail
-
 cd "$(dirname "$0")"
-mkdir -p .build-tools .build-out
-touch .build-tools/empty.modulemap
 
-cat << 'EOF' > .build-tools/clt_fix_vfs.yaml
-{
-  "version": 0,
-  "case-sensitive": "false",
-  "roots": [
-    {
-      "name": "/Library/Developer/CommandLineTools/usr/include/swift",
-      "type": "directory",
-      "contents": [
-        {
-          "name": "bridging.modulemap",
-          "type": "file",
-          "external-contents": "/Users/esine/Developer/MemoFlow/.build-tools/empty.modulemap"
-        }
-      ]
-    }
-  ]
-}
-EOF
+# Tests use isolated temporary recording folders, never the live recording library.
+swift test --scratch-path .build-verification
+swift run --scratch-path .build-verification MemoFlowAcceptanceRunner
+xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+  -configuration Debug -destination 'platform=macOS' \
+  -derivedDataPath .build-mac-verification CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+  -configuration Debug -sdk iphonesimulator \
+  -derivedDataPath .build-iphone-verification CODE_SIGNING_ALLOWED=NO build
 
-echo "==> 1/3 编译 MemoFlowCore 核心模块..."
-swiftc \
-  -vfsoverlay .build-tools/clt_fix_vfs.yaml \
-  -Xcc -ivfsoverlay -Xcc .build-tools/clt_fix_vfs.yaml \
-  -emit-module -emit-library \
-  -module-name MemoFlowCore \
-  -enable-testing \
-  Sources/MemoFlowCore/Models/*.swift \
-  Sources/MemoFlowCore/Services/*.swift \
-  -emit-module-path .build-out/MemoFlowCore.swiftmodule \
-  -o .build-out/libMemoFlowCore.dylib
-
-echo "==> 2/3 编译 MemoFlowApp 原生界面应用与 App Bundle..."
-swiftc \
-  -vfsoverlay .build-tools/clt_fix_vfs.yaml \
-  -Xcc -ivfsoverlay -Xcc .build-tools/clt_fix_vfs.yaml \
-  -parse-as-library \
-  Sources/MemoFlowCore/Models/*.swift \
-  Sources/MemoFlowCore/Services/*.swift \
-  Sources/MemoFlowApp/Views/*.swift \
-  Sources/MemoFlowApp/MemoFlowApp.swift \
-  -o MemoFlow.app/Contents/MacOS/MemoFlow
-
-codesign --force --deep --sign - MemoFlow.app
-
-echo "==> 3/3 编译并运行 PRD v1.1 验收测试套件..."
-swiftc \
-  -vfsoverlay .build-tools/clt_fix_vfs.yaml \
-  -Xcc -ivfsoverlay -Xcc .build-tools/clt_fix_vfs.yaml \
-  -parse-as-library \
-  -I .build-out -L .build-out -lMemoFlowCore \
-  -Xlinker -rpath -Xlinker @executable_path \
-  Tests/MemoFlowCoreTests/PRDTestRunner.swift \
-  -o .build-out/PRDTestRunner
-
-./.build-out/PRDTestRunner
+print '构建及核心测试通过。产物位于 .build-mac-verification / .build-iphone-verification。'
+print '锁屏、来电和蓝牙中断仍需 iPhone 真机验收；本脚本不运行云端接口。'

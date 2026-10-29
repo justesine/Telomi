@@ -30,7 +30,15 @@ let package = Package(
         .testTarget(
             name: "MemoFlowCoreTests",
             dependencies: ["MemoFlowCore"],
-            path: "Tests/MemoFlowCoreTests"
+            path: "Tests/MemoFlowCoreTests",
+            exclude: ["PRDTestRunner.swift"]
+        ),
+        .executableTarget(
+            name: "MemoFlowAcceptanceRunner",
+            dependencies: ["MemoFlowCore"],
+            path: "Tests/MemoFlowCoreTests",
+            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift"],
+            sources: ["PRDTestRunner.swift"]
         )
     ]
 )

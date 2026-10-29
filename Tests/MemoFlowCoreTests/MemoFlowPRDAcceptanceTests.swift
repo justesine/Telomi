@@ -3,7 +3,7 @@ import XCTest
 
 final class MemoFlowPRDAcceptanceTests: XCTestCase {
 
-    private func makeIsolatedStore() -> MemoFlowStore {
+    @MainActor private func makeIsolatedStore() -> MemoFlowStore {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MemoFlowTest_\(UUID().uuidString).json")
         return MemoFlowStore(customStorageURL: tempURL)
