@@ -34,8 +34,15 @@ public struct RecordingDetailView: View {
     @State private var newBookmarkNoteInput: String = ""
 
     public enum DetailTab: String, CaseIterable {
-        case aiNote = "AI 笔记与行动"
-        case transcript = "逐字稿"
+        case aiNote = "ai_note"
+        case transcript = "transcript"
+
+        public func localizedTitle(isEnglish: Bool) -> String {
+            switch self {
+            case .aiNote: return isEnglish ? "Notes & Actions" : "AI 笔记与行动"
+            case .transcript: return isEnglish ? "Transcript" : "逐字稿"
+            }
+        }
     }
 
     public init(
@@ -228,7 +235,7 @@ public struct RecordingDetailView: View {
                     HStack(spacing: 6) {
                         Image(systemName: tab == .aiNote ? "sparkles.rectangle.stack.fill" : "text.quote")
                             .font(.system(size: 12, weight: .semibold))
-                        Text(tab.rawValue)
+                        Text(tab.localizedTitle(isEnglish: store.preferences.appLanguage.isEnglish))
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                     }
                     .foregroundStyle(isSel ? MFTheme.textPrimary : MFTheme.textSecondary)

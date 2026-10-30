@@ -118,6 +118,10 @@ public struct RecorderSheetView: View {
         }
     }
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     private var modeSelectorCard: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
@@ -128,7 +132,7 @@ public struct RecorderSheetView: View {
                             selectedMode = mode
                         }
                     } label: {
-                        Text(mode.displayTitle)
+                        Text(mode.localizedTitle(isEnglish: isEnglish))
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(isSelected ? Color.white : MFTheme.textSecondary)
                             .frame(maxWidth: .infinity)
@@ -155,7 +159,7 @@ public struct RecorderSheetView: View {
                     )
             )
 
-            Text(selectedMode.subtitle)
+            Text(selectedMode.localizedSubtitle(isEnglish: isEnglish))
                 .font(.system(size: 11))
                 .foregroundStyle(MFTheme.textMuted)
         }

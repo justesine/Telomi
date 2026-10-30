@@ -74,10 +74,10 @@ public struct UnifiedReviewView: View {
         }
         .focusEffectDisabled()
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
-        .navigationTitle("统一待确认区")
+        .navigationTitle(store.preferences.appLanguage.isEnglish ? "Unified Review" : "统一待确认区")
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Button("完成") {
+                Button(store.preferences.appLanguage.isEnglish ? "Done" : "完成") {
                     dismiss()
                 }
             }

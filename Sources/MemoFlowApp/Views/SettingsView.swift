@@ -262,7 +262,7 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Settings Destination Enum (3 Groups, 9 Pages)
+// MARK: - Settings Destination Enum (3 Groups, 10 Items)
 
 public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
     case asr = "asr"
@@ -273,22 +273,28 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
     case memory = "memory"
     case calendar = "calendar"
     case appearance = "appearance"
+    case language = "language"
     case privacy = "privacy"
 
     public var id: String { rawValue }
 
-    public var title: String {
+    public func localizedTitle(isEnglish: Bool) -> String {
         switch self {
-        case .asr: return "语音转写"
-        case .llm: return "AI 笔记"
-        case .liveStreaming: return "边录边整理"
-        case .speaker: return "说话人与昵称"
+        case .asr: return L10n.speechToText(isEnglish)
+        case .llm: return L10n.aiNotes(isEnglish)
+        case .liveStreaming: return L10n.liveStreaming(isEnglish)
+        case .speaker: return L10n.speakerAndNicknames(isEnglish)
         case .obsidian: return "Obsidian"
-        case .memory: return "个人记忆"
-        case .calendar: return "日历与提醒事项"
-        case .appearance: return "外观"
-        case .privacy: return "隐私与数据"
+        case .memory: return L10n.personalMemory(isEnglish)
+        case .calendar: return L10n.calendarAndReminders(isEnglish)
+        case .appearance: return L10n.appearance(isEnglish)
+        case .language: return L10n.language(isEnglish)
+        case .privacy: return L10n.privacyAndData(isEnglish)
         }
+    }
+
+    public var title: String {
+        localizedTitle(isEnglish: false)
     }
 
     public var iconName: String {
@@ -301,19 +307,24 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
         case .memory: return "brain.head.profile"
         case .calendar: return "calendar.badge.clock"
         case .appearance: return "moon"
+        case .language: return "globe"
         case .privacy: return "hand.raised.fill"
         }
     }
 
-    public var groupName: String {
+    public func localizedGroupName(isEnglish: Bool) -> String {
         switch self {
         case .asr, .llm, .liveStreaming, .speaker:
-            return "录音与整理"
+            return L10n.recordingAndNotesGroup(isEnglish)
         case .obsidian, .memory, .calendar:
-            return "知识与联动"
-        case .appearance, .privacy:
-            return "偏好与管理"
+            return L10n.knowledgeAndSyncGroup(isEnglish)
+        case .appearance, .language, .privacy:
+            return L10n.preferencesGroup(isEnglish)
         }
+    }
+
+    public var groupName: String {
+        localizedGroupName(isEnglish: false)
     }
 
     public var iconColor: Color {
@@ -326,6 +337,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
         case .memory: return MFTheme.softViolet
         case .calendar: return MFTheme.mintGreen
         case .appearance: return MFTheme.iceCyan
+        case .language: return MFTheme.mintGreen
         case .privacy: return MFTheme.coralRed
         }
     }
@@ -455,15 +467,19 @@ public struct SettingsView: View {
         }
     }
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     private var macSidebarView: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 MemoFlowWaveformBrandIcon(size: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("服务与设置")
+                    Text(L10n.serviceAndSettings(isEnglish))
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(MFTheme.textPrimary)
-                    Text("MemoFlow 设置中心")
+                    Text(L10n.settingsCenterSubtitle(isEnglish))
                         .font(.system(size: 10))
                         .foregroundStyle(MFTheme.textSecondary)
                 }
@@ -477,9 +493,9 @@ public struct SettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    macSidebarGroup(title: "录音与整理", destinations: [.asr, .llm, .liveStreaming, .speaker])
-                    macSidebarGroup(title: "知识与联动", destinations: [.obsidian, .memory, .calendar])
-                    macSidebarGroup(title: "偏好与管理", destinations: [.appearance, .privacy])
+                    macSidebarGroup(title: L10n.recordingAndNotesGroup(isEnglish), destinations: [.asr, .llm, .liveStreaming, .speaker])
+                    macSidebarGroup(title: L10n.knowledgeAndSyncGroup(isEnglish), destinations: [.obsidian, .memory, .calendar])
+                    macSidebarGroup(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy])
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 12)
@@ -499,6 +515,8 @@ public struct SettingsView: View {
             ForEach(destinations) { dest in
                 if dest == .appearance {
                     macAppearanceSidebarRow
+                } else if dest == .language {
+                    macLanguageSidebarRow
                 } else {
                     let isSelected = selectedDestination == dest
                     Button {
@@ -510,7 +528,7 @@ public struct SettingsView: View {
                                 .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
                                 .frame(width: 18)
 
-                            Text(dest.title)
+                            Text(dest.localizedTitle(isEnglish: isEnglish))
                                 .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                                 .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
 
@@ -538,9 +556,9 @@ public struct SettingsView: View {
                 showSavedFeedback()
             } label: {
                 if store.preferences.appearanceTheme == .system {
-                    Label("系统", systemImage: "checkmark")
+                    Label(L10n.systemTheme(isEnglish), systemImage: "checkmark")
                 } else {
-                    Text("系统")
+                    Text(L10n.systemTheme(isEnglish))
                 }
             }
 
@@ -550,9 +568,9 @@ public struct SettingsView: View {
                 showSavedFeedback()
             } label: {
                 if store.preferences.appearanceTheme == .warmPaper {
-                    Label("浅色", systemImage: "checkmark")
+                    Label(L10n.lightTheme(isEnglish), systemImage: "checkmark")
                 } else {
-                    Text("浅色")
+                    Text(L10n.lightTheme(isEnglish))
                 }
             }
 
@@ -562,9 +580,9 @@ public struct SettingsView: View {
                 showSavedFeedback()
             } label: {
                 if store.preferences.appearanceTheme == .darkNight {
-                    Label("深色", systemImage: "checkmark")
+                    Label(L10n.darkTheme(isEnglish), systemImage: "checkmark")
                 } else {
-                    Text("深色")
+                    Text(L10n.darkTheme(isEnglish))
                 }
             }
         } label: {
@@ -574,13 +592,78 @@ public struct SettingsView: View {
                     .foregroundStyle(MFTheme.iceCyan)
                     .frame(width: 18)
 
-                Text("外观")
+                Text(L10n.appearance(isEnglish))
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(MFTheme.textSecondary)
 
                 Spacer()
 
                 Text(appearanceShortLabel(store.preferences.appearanceTheme))
+                    .font(.system(size: 11))
+                    .foregroundStyle(MFTheme.textMuted)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(MFTheme.textMuted)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private var macLanguageSidebarRow: some View {
+        Menu {
+            Button {
+                store.preferences.appLanguage = .system
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appLanguage == .system {
+                    Label(L10n.languageOptionTitle(.system, isEnglish: isEnglish), systemImage: "checkmark")
+                } else {
+                    Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish))
+                }
+            }
+
+            Button {
+                store.preferences.appLanguage = .chinese
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appLanguage == .chinese {
+                    Label("简体中文", systemImage: "checkmark")
+                } else {
+                    Text("简体中文")
+                }
+            }
+
+            Button {
+                store.preferences.appLanguage = .english
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appLanguage == .english {
+                    Label("English", systemImage: "checkmark")
+                } else {
+                    Text("English")
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "globe")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(MFTheme.mintGreen)
+                    .frame(width: 18)
+
+                Text(L10n.language(isEnglish))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Spacer()
+
+                Text(L10n.languageShortLabel(store.preferences.appLanguage, isEnglish: isEnglish))
                     .font(.system(size: 11))
                     .foregroundStyle(MFTheme.textMuted)
 
@@ -605,35 +688,35 @@ public struct SettingsView: View {
                 HStack(spacing: 12) {
                     MemoFlowWaveformBrandIcon(size: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("服务与设置")
+                        Text(L10n.serviceAndSettings(isEnglish))
                             .font(.system(size: 17, weight: .bold, design: .rounded))
                             .foregroundStyle(MFTheme.textPrimary)
-                        Text("按功能模块独立管理 · 密钥安全保存在 Keychain")
+                        Text(L10n.settingsHeaderNote(isEnglish))
                             .font(.caption2)
                             .foregroundStyle(MFTheme.textSecondary)
                     }
                     Spacer()
                     if savedToastVisible {
-                        MFBadgePill("已保存", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                        MFBadgePill(L10n.saved(isEnglish), color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
                     }
                 }
                 .padding(.horizontal, 4)
                 .padding(.top, 4)
 
                 // 1. 录音与整理
-                iosGroupCard(title: "录音与整理", destinations: [.asr, .llm, .liveStreaming, .speaker])
+                iosGroupCard(title: L10n.recordingAndNotesGroup(isEnglish), destinations: [.asr, .llm, .liveStreaming, .speaker])
 
                 // 2. 知识与联动
-                iosGroupCard(title: "知识与联动", destinations: [.obsidian, .memory, .calendar])
+                iosGroupCard(title: L10n.knowledgeAndSyncGroup(isEnglish), destinations: [.obsidian, .memory, .calendar])
 
                 // 3. 偏好与管理
-                iosGroupCard(title: "偏好与管理", destinations: [.appearance, .privacy])
+                iosGroupCard(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy])
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
         }
         .background(MFTheme.sheetBg)
-        .navigationTitle("设置")
+        .navigationTitle(L10n.settings(isEnglish))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -655,6 +738,8 @@ public struct SettingsView: View {
                 ForEach(Array(destinations.enumerated()), id: \.element) { index, dest in
                     if dest == .appearance {
                         iosAppearanceRow
+                    } else if dest == .language {
+                        iosLanguageRow
                     } else {
                         #if os(iOS)
                         NavigationLink(value: dest) {
@@ -705,7 +790,7 @@ public struct SettingsView: View {
                 .foregroundStyle(MFTheme.iceCyan)
                 .frame(width: 24, height: 24)
 
-            Text("外观")
+            Text(L10n.appearance(isEnglish))
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(MFTheme.textPrimary)
 
@@ -718,9 +803,9 @@ public struct SettingsView: View {
                     showSavedFeedback()
                 } label: {
                     if store.preferences.appearanceTheme == .system {
-                        Label("系统", systemImage: "checkmark")
+                        Label(L10n.systemTheme(isEnglish), systemImage: "checkmark")
                     } else {
-                        Text("系统")
+                        Text(L10n.systemTheme(isEnglish))
                     }
                 }
 
@@ -730,9 +815,9 @@ public struct SettingsView: View {
                     showSavedFeedback()
                 } label: {
                     if store.preferences.appearanceTheme == .warmPaper {
-                        Label("浅色", systemImage: "checkmark")
+                        Label(L10n.lightTheme(isEnglish), systemImage: "checkmark")
                     } else {
-                        Text("浅色")
+                        Text(L10n.lightTheme(isEnglish))
                     }
                 }
 
@@ -742,9 +827,9 @@ public struct SettingsView: View {
                     showSavedFeedback()
                 } label: {
                     if store.preferences.appearanceTheme == .darkNight {
-                        Label("深色", systemImage: "checkmark")
+                        Label(L10n.darkTheme(isEnglish), systemImage: "checkmark")
                     } else {
-                        Text("深色")
+                        Text(L10n.darkTheme(isEnglish))
                     }
                 }
             } label: {
@@ -766,11 +851,79 @@ public struct SettingsView: View {
         .contentShape(Rectangle())
     }
 
+    private var iosLanguageRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "globe")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(MFTheme.mintGreen)
+                .frame(width: 24, height: 24)
+
+            Text(L10n.language(isEnglish))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MFTheme.textPrimary)
+
+            Spacer()
+
+            Menu {
+                Button {
+                    store.preferences.appLanguage = .system
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appLanguage == .system {
+                        Label(L10n.languageOptionTitle(.system, isEnglish: isEnglish), systemImage: "checkmark")
+                    } else {
+                        Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish))
+                    }
+                }
+
+                Button {
+                    store.preferences.appLanguage = .chinese
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appLanguage == .chinese {
+                        Label("简体中文", systemImage: "checkmark")
+                    } else {
+                        Text("简体中文")
+                    }
+                }
+
+                Button {
+                    store.preferences.appLanguage = .english
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appLanguage == .english {
+                        Label("English", systemImage: "checkmark")
+                    } else {
+                        Text("English")
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(L10n.languageOptionTitle(store.preferences.appLanguage, isEnglish: isEnglish))
+                        .font(.system(size: 14))
+                        .foregroundStyle(MFTheme.textSecondary)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MFTheme.textMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
+    }
+
     private func appearanceShortLabel(_ theme: AppearanceTheme) -> String {
         switch theme {
-        case .system: return "系统"
-        case .warmPaper: return "浅色"
-        case .darkNight: return "深色"
+        case .system: return L10n.systemTheme(isEnglish)
+        case .warmPaper: return L10n.lightTheme(isEnglish)
+        case .darkNight: return L10n.darkTheme(isEnglish)
         }
     }
 
@@ -781,7 +934,7 @@ public struct SettingsView: View {
                 .foregroundStyle(dest.iconColor)
                 .frame(width: 24, height: 24)
 
-            Text(dest.title)
+            Text(dest.localizedTitle(isEnglish: isEnglish))
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(MFTheme.textPrimary)
 
@@ -820,7 +973,7 @@ public struct SettingsView: View {
                 )
         }
         .buttonStyle(.plain)
-        .help("关闭设置")
+        .help(L10n.closeSettings(isEnglish))
     }
 
     // MARK: - Status Summaries for Home Rows
@@ -829,18 +982,18 @@ public struct SettingsView: View {
         switch dest {
         case .asr:
             switch selectedASRProvider {
-            case .appleLocal: return "Apple 本地识别"
-            case .whisperLocal: return "Whisper 本机模型"
+            case .appleLocal: return isEnglish ? "Apple Local Speech" : "Apple 本地识别"
+            case .whisperLocal: return isEnglish ? "Whisper Local" : "Whisper 本机模型"
             case .siliconFlow:
                 let short = store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName
                 return "硅基流动 · \(short.isEmpty ? "SenseVoice" : short)"
             case .groq: return "Groq · \(store.preferences.asrModelName)"
             case .openAI: return "OpenAI · \(store.preferences.asrModelName)"
-            case .custom: return "自定义 ASR"
+            case .custom: return isEnglish ? "Custom ASR" : "自定义 ASR"
             }
         case .llm:
             switch selectedLLMProvider {
-            case .localRules: return "本地规则引擎"
+            case .localRules: return isEnglish ? "Local Rules" : "本地规则引擎"
             case .siliconFlow:
                 let short = store.preferences.llmModelName.components(separatedBy: "/").last ?? store.preferences.llmModelName
                 return "硅基流动 · \(short.isEmpty ? "Qwen2.5-7B" : short)"
@@ -854,38 +1007,40 @@ public struct SettingsView: View {
             case .minimax: return "MiniMax · \(store.preferences.llmModelName)"
             case .qianfan: return "百度千帆 · \(store.preferences.llmModelName)"
             case .openAI: return "OpenAI · \(store.preferences.llmModelName)"
-            case .custom: return "自定义 LLM"
+            case .custom: return isEnglish ? "Custom LLM" : "自定义 LLM"
             }
         case .liveStreaming:
-            return store.preferences.liveStreamingTranscriptionEnabled ? "已开启" : "停止后统一处理"
+            return store.preferences.liveStreamingTranscriptionEnabled ? L10n.liveStreamingEnabled(isEnglish) : L10n.liveStreamingDisabled(isEnglish)
         case .speaker:
             return store.preferences.speakerNicknameTheme.displayTitle
         case .obsidian:
             if let path = store.preferences.obsidianVaultRootPath, !path.isEmpty {
                 let name = URL(fileURLWithPath: path).lastPathComponent
-                return "已连接 \(name.isEmpty ? "笔记库" : name)"
+                return L10n.connected(isEnglish, name: name.isEmpty ? "Vault" : name)
             }
-            return "未连接"
+            return L10n.notConnected(isEnglish)
         case .memory:
             let pending = store.personalMemories.filter { $0.status == .pendingReview }.count
             let confirmed = store.personalMemories.filter { $0.status == .confirmed }.count
-            if pending > 0 { return "\(pending) 项待审阅" }
-            if confirmed > 0 { return "\(confirmed) 条已生效" }
-            return "未启用记忆"
+            if pending > 0 { return L10n.pendingMemories(isEnglish, count: pending) }
+            if confirmed > 0 { return L10n.activeMemories(isEnglish, count: confirmed) }
+            return L10n.memoryDisabled(isEnglish)
         case .calendar:
             switch store.preferences.calendarCreationMode {
-            case .autoCreate: return "智能自动创建"
-            case .reviewFirst: return "审核后创建"
+            case .autoCreate: return L10n.calendarAutoCreate(isEnglish)
+            case .reviewFirst: return L10n.calendarReviewFirst(isEnglish)
             }
         case .appearance:
             switch store.preferences.appearanceTheme {
-            case .warmPaper: return "暖纸 (Light)"
-            case .darkNight: return "夜读 (Dark)"
-            case .system: return "跟随系统"
+            case .warmPaper: return isEnglish ? "Warm Paper (Light)" : "暖纸 (Light)"
+            case .darkNight: return isEnglish ? "Dark Night (Dark)" : "夜读 (Dark)"
+            case .system: return isEnglish ? "System" : "跟随系统"
             }
+        case .language:
+            return L10n.languageOptionTitle(store.preferences.appLanguage, isEnglish: isEnglish)
         case .privacy:
             let isConsented = store.processingConsent.grantedAt != nil && store.processingConsent.revokedAt == nil
-            return isConsented ? "已授权云端处理" : "仅端侧本地"
+            return isConsented ? L10n.cloudAuthorized(isEnglish) : L10n.onDeviceOnly(isEnglish)
         }
     }
 
@@ -908,13 +1063,14 @@ public struct SettingsView: View {
                 case .memory: memorySubpageContent
                 case .calendar: calendarSubpageContent
                 case .appearance: appearanceSubpageContent
+                case .language: languageSubpageContent
                 case .privacy: privacySubpageContent
                 }
             }
             .padding(18)
         }
         .background(MFTheme.sheetBg)
-        .navigationTitle(dest.title)
+        .navigationTitle(dest.localizedTitle(isEnglish: isEnglish))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -1653,11 +1809,11 @@ public struct SettingsView: View {
     private var appearanceSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("外观主题")
+                Text(L10n.appearance(isEnglish))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(MFTheme.textPrimary)
                 Spacer()
-                Picker("外观", selection: Binding(
+                Picker(L10n.appearance(isEnglish), selection: Binding(
                     get: { store.preferences.appearanceTheme },
                     set: {
                         store.preferences.appearanceTheme = $0
@@ -1665,9 +1821,9 @@ public struct SettingsView: View {
                         showSavedFeedback()
                     }
                 )) {
-                    Text("系统").tag(AppearanceTheme.system)
-                    Text("浅色").tag(AppearanceTheme.warmPaper)
-                    Text("深色").tag(AppearanceTheme.darkNight)
+                    Text(L10n.systemTheme(isEnglish)).tag(AppearanceTheme.system)
+                    Text(L10n.lightTheme(isEnglish)).tag(AppearanceTheme.warmPaper)
+                    Text(L10n.darkTheme(isEnglish)).tag(AppearanceTheme.darkNight)
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 220)
@@ -1676,7 +1832,35 @@ public struct SettingsView: View {
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }
 
-    // MARK: - 9. Privacy & Data Subpage Content
+    // MARK: - 9. Language Subpage Content
+
+    private var languageSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(L10n.language(isEnglish))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MFTheme.textPrimary)
+                Spacer()
+                Picker(L10n.language(isEnglish), selection: Binding(
+                    get: { store.preferences.appLanguage },
+                    set: {
+                        store.preferences.appLanguage = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                )) {
+                    Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish)).tag(AppLanguage.system)
+                    Text("简体中文").tag(AppLanguage.chinese)
+                    Text("English").tag(AppLanguage.english)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 240)
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 10. Privacy & Data Subpage Content
 
     private var privacySubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {

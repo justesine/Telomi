@@ -27,6 +27,20 @@ public enum RecordingProcessingStatus: String, Codable, CaseIterable, Sendable {
         case .failed: return "处理失败"
         }
     }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .recording: return isEnglish ? "Recording" : "录音中"
+        case .liveStreaming: return isEnglish ? "Live Streaming" : "边录边整理中"
+        case .savedPendingTranscription: return isEnglish ? "Saved · Pending STT" : "已安全保存·待转写"
+        case .uploading: return isEnglish ? "Uploading" : "上传中"
+        case .transcribing: return isEnglish ? "Transcribing" : "转写中"
+        case .transcriptNeedsReview: return isEnglish ? "Review Transcript" : "逐字稿待校对"
+        case .organizing: return isEnglish ? "Generating Note" : "整理中"
+        case .completed: return isEnglish ? "Completed" : "整理完成"
+        case .failed: return isEnglish ? "Failed" : "处理失败"
+        }
+    }
 }
 
 /// 整理模式（PRD 1.3 & 6.1: 随手记 / 会议记）
@@ -41,10 +55,26 @@ public enum NoteMode: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .quickNote: return isEnglish ? "Quick Note" : "随手记"
+        case .meetingNote: return isEnglish ? "Meeting Note" : "会议记"
+        }
+    }
+
     public var subtitle: String {
         switch self {
         case .quickNote: return "保留原意的短笔记，不强行扩写观点与待办"
         case .meetingNote: return "提炼背景、关键观点、决策与有证据的行动候选"
+        }
+    }
+
+    public func localizedSubtitle(isEnglish: Bool) -> String {
+        switch self {
+        case .quickNote:
+            return isEnglish ? "Concise note preserving original context without artificial expansions" : "保留原意的短笔记，不强行扩写观点与待办"
+        case .meetingNote:
+            return isEnglish ? "Extract background, takeaways, decisions, and evidence-backed actions" : "提炼背景、关键观点、决策与有证据的行动候选"
         }
     }
 }

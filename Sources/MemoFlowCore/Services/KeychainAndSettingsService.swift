@@ -33,6 +33,57 @@ public enum AppearanceTheme: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// 应用语言偏好（跟随系统 / 简体中文 / English）
+public enum AppLanguage: String, Codable, CaseIterable, Sendable {
+    case system = "system"
+    case chinese = "zh-Hans"
+    case english = "en"
+
+    public var displayTitle: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .chinese: return "简体中文"
+        case .english: return "English"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .chinese: return "简体中文"
+        case .english: return "English"
+        }
+    }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .system: return isEnglish ? "System" : "跟随系统"
+        case .chinese: return isEnglish ? "Simplified Chinese" : "简体中文"
+        case .english: return "English"
+        }
+    }
+
+    public var isEnglish: Bool {
+        switch self {
+        case .english: return true
+        case .chinese: return false
+        case .system:
+            let preferred = Locale.preferredLanguages.first?.lowercased() ?? ""
+            return preferred.hasPrefix("en")
+        }
+    }
+
+    public var appleLocaleIdentifier: String {
+        switch self {
+        case .english: return "en-US"
+        case .chinese: return "zh-CN"
+        case .system:
+            let preferred = Locale.preferredLanguages.first ?? "zh-CN"
+            return preferred.lowercased().hasPrefix("en") ? "en-US" : "zh-CN"
+        }
+    }
+}
+
 /// P2-7：跨设备（iPhone <-> Mac）录音音频可用性与同步策略
 public enum AudioSyncMode: String, Codable, CaseIterable, Sendable {
     case localOnly = "local_only"
@@ -104,6 +155,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
     public var customLLMModels: [String]
     /// 界面视觉主题风格（PRD V1.3 VIS-001）
     public var appearanceTheme: AppearanceTheme
+    /// 应用界面与处理语言（跟随系统 / 简体中文 / English）
+    public var appLanguage: AppLanguage
     /// 边录边整理模式开关（录音过程中持续分段转写，增量生成可查看的笔记草稿，停止后复用结果）
     public var liveStreamingTranscriptionEnabled: Bool
     /// 实时草稿更新频率（按新增录音时长，秒，默认 60 秒）
@@ -134,6 +187,7 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         customASRModels: [String] = [],
         customLLMModels: [String] = [],
         appearanceTheme: AppearanceTheme = .warmPaper,
+        appLanguage: AppLanguage = .system,
         liveStreamingTranscriptionEnabled: Bool = false,
         liveStreamingSummaryIntervalSeconds: Int = 60
     ) {
@@ -157,6 +211,7 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.customASRModels = customASRModels
         self.customLLMModels = customLLMModels
         self.appearanceTheme = appearanceTheme
+        self.appLanguage = appLanguage
         self.liveStreamingTranscriptionEnabled = liveStreamingTranscriptionEnabled
         self.liveStreamingSummaryIntervalSeconds = liveStreamingSummaryIntervalSeconds
     }
@@ -208,6 +263,7 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.customASRModels = try c.decodeIfPresent([String].self, forKey: .customASRModels) ?? []
         self.customLLMModels = try c.decodeIfPresent([String].self, forKey: .customLLMModels) ?? []
         self.appearanceTheme = try c.decodeIfPresent(AppearanceTheme.self, forKey: .appearanceTheme) ?? .warmPaper
+        self.appLanguage = try c.decodeIfPresent(AppLanguage.self, forKey: .appLanguage) ?? .system
         self.liveStreamingTranscriptionEnabled = try c.decodeIfPresent(Bool.self, forKey: .liveStreamingTranscriptionEnabled) ?? false
         self.liveStreamingSummaryIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .liveStreamingSummaryIntervalSeconds) ?? 60
     }

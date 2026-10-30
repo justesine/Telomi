@@ -346,9 +346,10 @@ public final class MemoFlowStore: ObservableObject {
         marks: [RecordingMark] = []
     ) {
         guard !recordings.contains(where: { $0.id == id }) else { return }
+        let isEn = preferences.appLanguage.isEnglish
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd HH:mm"
-        let defaultTitle = "\(selectedMode.displayTitle) \(formatter.string(from: createdAt))"
+        let defaultTitle = "\(selectedMode.localizedTitle(isEnglish: isEn)) \(formatter.string(from: createdAt))"
 
         var newRecording = Recording(
             id: id,
@@ -357,20 +358,20 @@ public final class MemoFlowStore: ObservableObject {
             recordedTimeZoneIdentifier: TimeZone.current.identifier,
             duration: duration,
             localAudioFileName: fileName,
-            language: "zh-CN",
+            language: preferences.appLanguage.appleLocaleIdentifier,
             processingStatus: .savedPendingTranscription
         )
 
         newRecording.marks = marks
         recordings.insert(newRecording, at: 0)
         preferences.defaultNoteMode = selectedMode
-        lastBannerFeedback = "已安全保存本地音频（\(TimeFormatting.formatDuration(duration))）"
+        lastBannerFeedback = isEn ? "Safely saved audio (\(TimeFormatting.formatDuration(duration)))" : "已安全保存本地音频（\(TimeFormatting.formatDuration(duration))）"
         guard saveToDisk() else { return }
         audioService.acknowledgeSavedRecording(id: id)
 
         guard isNetworkAvailable else {
             // PRD 4.2 & A01：无网时保留待转写状态，不丢音频
-            updateRecordingStatus(id, status: .savedPendingTranscription, failureReason: "当前无网络连接，音频已安全保存，待联网后转写")
+            updateRecordingStatus(id, status: .savedPendingTranscription, failureReason: isEn ? "No network connection. Audio saved safely for later transcription." : "当前无网络连接，音频已安全保存，待联网后转写")
             return
         }
 

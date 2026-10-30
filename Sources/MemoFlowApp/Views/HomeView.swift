@@ -30,6 +30,10 @@ public struct HomeView: View {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     private var searchResults: [RecordingSearchResult] {
         if isSearching {
             // UX-001: 跨日期的全局记忆搜索，不受选定单日或小时筛选限制
@@ -84,7 +88,7 @@ public struct HomeView: View {
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundStyle(MFTheme.textSecondary)
                             Spacer()
-                            Text("\(searchResults.count) 条记忆")
+                            Text(L10n.memoriesCount(isEnglish, count: searchResults.count))
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .foregroundStyle(MFTheme.textMuted)
                         }
@@ -216,92 +220,109 @@ public struct HomeView: View {
         }
     }
 
-    // MARK: - 1. Top Brand Header
+    // MARK: - 1. Top Brand Header (Left: Settings, Center: Logo & Model, Right: Sync & QA)
 
     private var topBrandHeader: some View {
-        HStack(alignment: .center, spacing: 12) {
-            MemoFlowWaveformBrandIcon(size: 38)
-                .shadow(color: Color.black.opacity(0.4), radius: 6, y: 3)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("MemoFlow")
-                    .font(.system(size: 21, weight: .bold, design: .rounded))
-                    .foregroundStyle(MFTheme.textPrimary)
+        ZStack {
+            // 中间：Logo 和模型名称
+            HStack(spacing: 8) {
+                MemoFlowWaveformBrandIcon(size: 20)
 
                 HStack(spacing: 5) {
                     Circle()
                         .fill(MFTheme.mintGreen)
-                        .frame(width: 6, height: 6)
-                    Text(store.preferences.asrEngineMode == .appleOnDevice
-                         ? "Apple 端侧语音引擎"
-                         : (store.preferences.asrEngineMode == .localWhisper
-                            ? "Whisper 本机识别"
-                            : store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MFTheme.textSecondary)
+                        .frame(width: 5, height: 5)
+                    Text(topBarEngineModelName)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(MFTheme.textPrimary)
+                        .lineLimit(1)
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(
+                Capsule()
+                    .fill(MFTheme.cardSurfaceGradient)
+                    .overlay(
+                        Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)
+                    )
+            )
 
-            Spacer()
-
-            if let vaultPath = store.preferences.obsidianVaultRootPath, !vaultPath.isEmpty {
+            // 两侧：左侧设置，右侧双向同步与跨笔记问答
+            HStack(alignment: .center) {
+                // 左边：设置图标
                 Button {
-                    _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: true)
+                    showingSettings = true
                 } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(MFTheme.mintGreen)
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
                         .frame(width: 36, height: 36)
                         .background(
                             Circle()
                                 .fill(MFTheme.cardSurfaceGradient)
                                 .overlay(
-                                    Circle()
-                                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                    Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
                                 )
                         )
                 }
                 .buttonStyle(.plain)
-                .help("双向同步 Obsidian 笔记库")
-            }
+                .help(L10n.serviceAndSettings(isEnglish))
 
-            Button {
-                showingGroundedQA = true
-            } label: {
-                Image(systemName: "books.vertical")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(MFTheme.softViolet)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle()
-                            .fill(MFTheme.cardSurfaceGradient)
-                            .overlay(
-                                Circle()
-                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
-                            )
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("跨笔记问答")
+                Spacer()
 
-            Button {
-                showingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(MFTheme.textPrimary)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle()
-                            .fill(MFTheme.cardSurfaceGradient)
-                            .overlay(
+                // 右边：双向同步与跨笔记问答
+                HStack(spacing: 8) {
+                    if let vaultPath = store.preferences.obsidianVaultRootPath, !vaultPath.isEmpty {
+                        Button {
+                            _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: true)
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(MFTheme.mintGreen)
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    Circle()
+                                        .fill(MFTheme.cardSurfaceGradient)
+                                        .overlay(
+                                            Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                        )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.obsidianSyncTooltip(isEnglish))
+                    }
+
+                    Button {
+                        showingGroundedQA = true
+                    } label: {
+                        Image(systemName: "books.vertical")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(MFTheme.softViolet)
+                            .frame(width: 36, height: 36)
+                            .background(
                                 Circle()
-                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                    .fill(MFTheme.cardSurfaceGradient)
+                                    .overlay(
+                                        Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                    )
                             )
-                    )
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.groundedQATooltip(isEnglish))
+                }
             }
-            .buttonStyle(.plain)
-            .help("服务与设置")
+        }
+    }
+
+    private var topBarEngineModelName: String {
+        if store.preferences.asrEngineMode == .appleOnDevice {
+            return isEnglish ? "Apple Local" : "Apple 本地"
+        } else if store.preferences.asrEngineMode == .localWhisper {
+            return isEnglish ? "Whisper Local" : "Whisper 本机"
+        } else {
+            let short = store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName
+            return short.isEmpty ? "SenseVoice" : short
         }
     }
 
@@ -335,21 +356,21 @@ public struct HomeView: View {
 
     private var listSectionTitle: String {
         if isSearching {
-            return "全局记忆检索结果"
+            return isEnglish ? "Search Results" : "全局记忆检索结果"
         }
         if let hour = selectedHourFilter {
-            return "\(String(format: "%02d:00", hour)) 时段记忆"
+            return isEnglish ? String(format: "%02d:00 Activity", hour) : "\(String(format: "%02d:00", hour)) 时段记忆"
         }
         if let date = selectedDate {
             if Calendar.current.isDateInToday(date) {
-                return "今日记忆"
+                return isEnglish ? "Today's Memories" : "今日记忆"
             }
             let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.dateFormat = "MM月dd日 记忆"
+            formatter.locale = Locale(identifier: isEnglish ? "en_US" : "zh_CN")
+            formatter.dateFormat = isEnglish ? "MMM d Memories" : "MM月dd日 记忆"
             return formatter.string(from: date)
         }
-        return "全部记忆"
+        return isEnglish ? "All Memories" : "全部记忆"
     }
 
     private var currentWeekDays: [Date] {
@@ -389,7 +410,7 @@ public struct HomeView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button("今天") {
+                    Button(isEnglish ? "Today" : "今天") {
                         withAnimation {
                             selectedWeekOffset = 0
                             selectedDate = Date()
@@ -414,7 +435,7 @@ public struct HomeView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button(selectedDate == nil ? "全部记忆" : "查看全部") {
+                    Button(selectedDate == nil ? (isEnglish ? "All Memories" : "全部记忆") : (isEnglish ? "View All" : "查看全部")) {
                         withAnimation {
                             if selectedDate == nil {
                                 selectedDate = Date()
@@ -491,7 +512,7 @@ public struct HomeView: View {
                     Image(systemName: "waveform.path.ecg")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MFTheme.iceCyan)
-                    Text("24 小时活动热力分布")
+                    Text(isEnglish ? "24h Activity Heatmap" : "24 小时活动热力分布")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(MFTheme.textPrimary)
                 }
@@ -499,14 +520,14 @@ public struct HomeView: View {
                 Spacer()
 
                 if let hour = selectedHourFilter {
-                    Button("取消时段筛选 (\(String(format: "%02d:00", hour)))") {
+                    Button(isEnglish ? "Clear Filter (\(String(format: "%02d:00", hour)))" : "取消时段筛选 (\(String(format: "%02d:00", hour)))") {
                         withAnimation { selectedHourFilter = nil }
                     }
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(MFTheme.warmAmber)
                     .buttonStyle(.plain)
                 } else {
-                    Text(totalCount > 0 ? "当日 \(totalCount) 段录音 · 共 \(totalSeconds) 秒" : "当日暂无录音活动")
+                    Text(totalCount > 0 ? (isEnglish ? "Today: \(totalCount) recordings · \(totalSeconds)s" : "当日 \(totalCount) 段录音 · 共 \(totalSeconds) 秒") : (isEnglish ? "No recording activity today" : "当日暂无录音活动"))
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(MFTheme.textSecondary)
                 }
@@ -568,27 +589,32 @@ public struct HomeView: View {
     private var headerYearMonthString: String {
         let date = selectedDate ?? Date()
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy年MM月"
+        formatter.locale = Locale(identifier: isEnglish ? "en_US" : "zh_CN")
+        formatter.dateFormat = isEnglish ? "MMMM yyyy" : "yyyy年MM月"
         return formatter.string(from: date)
     }
 
     private var headerSelectedDateString: String {
         if let date = selectedDate {
             let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.dateFormat = "MM月dd日 EEEE"
+            formatter.locale = Locale(identifier: isEnglish ? "en_US" : "zh_CN")
+            formatter.dateFormat = isEnglish ? "EEE, MMM d" : "MM月dd日 EEEE"
             return formatter.string(from: date)
         } else {
-            return "全部历史记忆"
+            return isEnglish ? "All Memories" : "全部历史记忆"
         }
     }
 
     private func weekdayShortString(for date: Date) -> String {
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: date)
-        let map = [1: "日", 2: "一", 3: "二", 4: "三", 5: "四", 6: "五", 7: "六"]
-        return map[weekday] ?? ""
+        if isEnglish {
+            let map = [1: "S", 2: "M", 3: "T", 4: "W", 5: "T", 6: "F", 7: "S"]
+            return map[weekday] ?? ""
+        } else {
+            let map = [1: "日", 2: "一", 3: "二", 4: "三", 5: "四", 6: "五", 7: "六"]
+            return map[weekday] ?? ""
+        }
     }
 
     private func dayNumberString(for date: Date) -> String {
@@ -653,16 +679,16 @@ public struct HomeView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
-                            Text("统一待确认区")
+                            Text(isEnglish ? "Unified Review Inbox" : "统一待确认区")
                                 .font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(MFTheme.textPrimary)
 
                             if totalPending > 0 {
-                                MFBadgePill("\(totalPending) 项待处理", color: MFTheme.warmAmber)
+                                MFBadgePill(isEnglish ? "\(totalPending) pending" : "\(totalPending) 项待处理", color: MFTheme.warmAmber)
                             }
                         }
 
-                        Text("审核 AI 提取的日程与待办 · 点按可回听原话音频证据")
+                        Text(isEnglish ? "Review AI extracted tasks & events · Tap to verify audio evidence" : "审核 AI 提取的日程与待办 · 点按可回听原话音频证据")
                             .font(.system(size: 11))
                             .foregroundStyle(MFTheme.textSecondary)
                     }
@@ -680,7 +706,7 @@ public struct HomeView: View {
                     HStack(spacing: 8) {
                         HStack(spacing: 5) {
                             Circle().fill(MFTheme.mintGreen).frame(width: 6, height: 6)
-                            Text("\(readyCount) 项要素齐全可直接分流")
+                            Text(isEnglish ? "\(readyCount) Ready to create" : "\(readyCount) 项要素齐全可直接分流")
                         }
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MFTheme.textPrimary)
@@ -690,7 +716,7 @@ public struct HomeView: View {
 
                         HStack(spacing: 5) {
                             Circle().fill(MFTheme.warmAmber).frame(width: 6, height: 6)
-                            Text("\(needsInfoCount) 项需核对时间或归属")
+                            Text(isEnglish ? "\(needsInfoCount) Need review" : "\(needsInfoCount) 项需核对时间或归属")
                         }
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MFTheme.textSecondary)
@@ -713,7 +739,7 @@ public struct HomeView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(MFTheme.textMuted)
 
-            TextField("搜索你的记忆…", text: $searchText)
+            TextField(isEnglish ? "Search your memories…" : "搜索你的记忆…", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(MFTheme.textPrimary)
@@ -745,10 +771,10 @@ public struct HomeView: View {
             Image(systemName: "waveform.badge.mic")
                 .font(.system(size: 36))
                 .foregroundStyle(MFTheme.iceBlue.opacity(0.7))
-            Text(searchText.isEmpty ? "还没有录音记录" : "未在全部记忆中找到匹配内容")
+            Text(searchText.isEmpty ? (isEnglish ? "No memories recorded yet" : "还没有录音记录") : (isEnglish ? "No matching memories found" : "未在全部记忆中找到匹配内容"))
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(MFTheme.textPrimary)
-            Text(searchText.isEmpty ? "点击下方按钮开始第一段随手记或会议录音，离线也可安全保存。" : "未检索到包含「\(searchText)」的录音标题、逐字稿原话或 AI 总结，请尝试更换关键词。")
+            Text(searchText.isEmpty ? (isEnglish ? "Tap the microphone below to start a quick note or meeting recording." : "点击下方麦克风开始第一段随手记或会议录音，离线也可安全保存。") : (isEnglish ? "No recording title, transcript, or AI notes match \"\(searchText)\"." : "未检索到包含「\(searchText)」的录音标题、逐字稿原话或 AI 总结，请尝试更换关键词。"))
                 .font(.system(size: 12))
                 .foregroundStyle(MFTheme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -782,10 +808,10 @@ public struct HomeView: View {
                         store.saveToDisk()
                     }
                 } label: {
-                    Text(mode.displayTitle)
+                    Text(mode.localizedTitle(isEnglish: isEnglish))
                         .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
                         .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
-                        .padding(.horizontal, 11)
+                        .padding(.horizontal, 12)
                         .padding(.vertical, 7)
                         .background(
                             Capsule()
@@ -795,7 +821,7 @@ public struct HomeView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(4)
+        .padding(3)
         .background(
             Capsule()
                 .fill(MFTheme.recessedBg)
@@ -810,24 +836,36 @@ public struct HomeView: View {
         Button {
             showingRecorderSheet = true
         } label: {
-            HStack(spacing: 10) {
-                Text("开始录音")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .tracking(0.3)
-                    .foregroundStyle(Color.white)
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.95, green: 0.35, blue: 0.28),
+                                Color(red: 0.88, green: 0.26, blue: 0.20)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 44, height: 44)
+                    .shadow(color: Color(red: 0.95, green: 0.35, blue: 0.28).opacity(0.42), radius: 8, x: 0, y: 3)
 
-                Image(systemName: "waveform")
-                    .font(.system(size: 14, weight: .bold))
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(Color.white)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 12)
-            .background(luminousPillInnerBackground)
-            .padding(3)
-            .background(luminousPillOuterBezel)
-            .shadow(color: MFTheme.iceBlue.opacity(0.32), radius: 10, x: 0, y: 3)
+            .padding(2)
+            .background(
+                Circle()
+                    .fill(MFTheme.cardBgTop)
+                    .overlay(
+                        Circle().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
+                    )
+            )
         }
         .buttonStyle(.plain)
+        .help(isEnglish ? "Start Recording" : "开始录音")
     }
 
     private var luminousPillInnerBackground: some View {
@@ -871,6 +909,10 @@ private struct RecordingRowCard: View {
     let onOpenSettings: () -> Void
     let onDeleteRequest: () -> Void
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     var body: some View {
         let rec = result.recording
         let note = store.notesByRecording[rec.id]
@@ -882,7 +924,7 @@ private struct RecordingRowCard: View {
             HStack(spacing: 8) {
                 if let mode = note?.mode {
                     MFBadgePill(
-                        mode.displayTitle,
+                        mode.localizedTitle(isEnglish: isEnglish),
                         color: mode == .quickNote ? MFTheme.iceBlue : MFTheme.softViolet,
                         icon: mode == .quickNote ? "bolt.fill" : "person.2.wave.2.fill"
                     )
@@ -900,7 +942,7 @@ private struct RecordingRowCard: View {
                 Spacer()
 
                 if rev?.isLiveDraft == true {
-                    MFBadgePill("实时草稿", color: MFTheme.warmAmber, icon: "pencil.and.outline")
+                    MFBadgePill(isEnglish ? "Live Draft" : "实时草稿", color: MFTheme.warmAmber, icon: "pencil.and.outline")
                 }
 
                 statusBadge(for: rec.processingStatus)
@@ -973,7 +1015,7 @@ private struct RecordingRowCard: View {
                 if counts.tasks > 0 || counts.events > 0 {
                     HStack(spacing: 4) {
                         Circle().fill(MFTheme.warmAmber).frame(width: 5, height: 5)
-                        Text("\(counts.tasks) 待办 · \(counts.events) 日程")
+                        Text(isEnglish ? "\(counts.tasks) Tasks · \(counts.events) Events" : "\(counts.tasks) 待办 · \(counts.events) 日程")
                             .fontWeight(.semibold)
                             .foregroundStyle(MFTheme.warmAmber)
                     }
@@ -1001,7 +1043,7 @@ private struct RecordingRowCard: View {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(MFTheme.iceBlue)
                         .frame(width: 3, height: 22)
-                    Text("匹配原话：\(snippet)")
+                    Text(isEnglish ? "Matched transcript: \(snippet)" : "匹配原话：\(snippet)")
                         .font(.system(size: 11))
                         .foregroundStyle(MFTheme.iceCyan)
                         .lineLimit(2)
@@ -1019,7 +1061,7 @@ private struct RecordingRowCard: View {
                         .foregroundStyle(MFTheme.coralRed)
 
                     HStack(spacing: 8) {
-                        MFLuminousActionButton("配置 API Key", icon: "key.fill", tint: MFTheme.iceBlue) {
+                        MFLuminousActionButton(L10n.configureAPIKey(isEnglish), icon: "key.fill", tint: MFTheme.iceBlue) {
                             onOpenSettings()
                         }
 
@@ -1031,7 +1073,7 @@ private struct RecordingRowCard: View {
                                     await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: false)
                                 }
                             } label: {
-                                Label("重新整理", systemImage: "sparkles")
+                                Label(L10n.regenerate(isEnglish), systemImage: "sparkles")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(MFTheme.textPrimary)
                                     .padding(.horizontal, 12)
@@ -1048,7 +1090,7 @@ private struct RecordingRowCard: View {
                                     await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
                                 }
                             } label: {
-                                Label("改用 Apple 本地识别重试", systemImage: "waveform.badge.mic")
+                                Label(L10n.retryWithAppleSpeech(isEnglish), systemImage: "waveform.badge.mic")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(MFTheme.textPrimary)
                                     .padding(.horizontal, 12)
@@ -1077,7 +1119,7 @@ private struct RecordingRowCard: View {
             default: return MFTheme.iceBlue
             }
         }()
-        MFBadgePill(status.displayTitle, color: color)
+        MFBadgePill(status.localizedTitle(isEnglish: isEnglish), color: color)
     }
 }
 
