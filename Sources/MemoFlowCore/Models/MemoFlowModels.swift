@@ -243,6 +243,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
     public var audioInterruptionNote: String?
     public var transcriptSource: TranscriptSource?
     public var marks: [RecordingMark]?
+    /// 逐字稿是否已由用户人工听校确认（nil 或 false 均视为尚未人工审核的机器稿/历史稿，P1-4）
+    public var isTranscriptReviewed: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -254,7 +256,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         language: String = "zh-CN",
         processingStatus: RecordingProcessingStatus = .savedPendingTranscription,
         failureReason: String? = nil,
-        audioInterruptionNote: String? = nil
+        audioInterruptionNote: String? = nil,
+        isTranscriptReviewed: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -266,10 +269,37 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         self.processingStatus = processingStatus
         self.failureReason = failureReason
         self.audioInterruptionNote = audioInterruptionNote
+        self.isTranscriptReviewed = isTranscriptReviewed
     }
 
     public var recordedTimeZone: TimeZone {
         TimeZone(identifier: recordedTimeZoneIdentifier) ?? .current
+    }
+
+    public var transcriptReviewStatusCode: String {
+        if isTranscriptReviewed == true {
+            return "reviewed"
+        }
+        if processingStatus == .transcriptNeedsReview {
+            return "machine_needs_review"
+        }
+        if transcriptSource == nil {
+            return "legacy_unverified"
+        }
+        return "machine_unreviewed"
+    }
+
+    public var transcriptReviewDisplayTitle: String {
+        switch transcriptReviewStatusCode {
+        case "reviewed":
+            return "已人工校对"
+        case "machine_needs_review":
+            return "机器稿待校对（尚未人工听校）"
+        case "legacy_unverified":
+            return "历史稿未核验音频来源"
+        default:
+            return "机器初稿（尚未人工校对）"
+        }
     }
 }
 
@@ -444,6 +474,10 @@ public struct StructuredNoteContent: Codable, Equatable, Sendable {
     public var decisions: [String]
     /// 按时间轴划分的录音章节（导出 Obsidian 时形成清晰的「每个录音的章节」）
     public var chapters: [NoteChapter]
+    /// P1-5：从历史笔记检索到的关联背景要点（严格区分于本次录音事实，绝不自动转为本次新承诺）
+    public var historicalContextNotes: [String] = []
+    /// P1-5：AI 延伸推测或建议（严格区分于原话事实与确认结论）
+    public var aiInferences: [String] = []
 
     public init(
         suggestedTitle: String,
@@ -451,7 +485,9 @@ public struct StructuredNoteContent: Codable, Equatable, Sendable {
         backgroundPoints: [String] = [],
         keyPoints: [String] = [],
         decisions: [String] = [],
-        chapters: [NoteChapter] = []
+        chapters: [NoteChapter] = [],
+        historicalContextNotes: [String] = [],
+        aiInferences: [String] = []
     ) {
         self.suggestedTitle = suggestedTitle
         self.summaryOrShortNote = summaryOrShortNote
@@ -459,6 +495,8 @@ public struct StructuredNoteContent: Codable, Equatable, Sendable {
         self.keyPoints = keyPoints
         self.decisions = decisions
         self.chapters = chapters
+        self.historicalContextNotes = historicalContextNotes
+        self.aiInferences = aiInferences
     }
 
     public init(from decoder: Decoder) throws {
@@ -470,10 +508,12 @@ public struct StructuredNoteContent: Codable, Equatable, Sendable {
         self.keyPoints = try c.decodeIfPresent([String].self, forKey: .keyPoints) ?? []
         self.decisions = try c.decodeIfPresent([String].self, forKey: .decisions) ?? []
         self.chapters = try c.decodeIfPresent([NoteChapter].self, forKey: .chapters) ?? []
+        self.historicalContextNotes = try c.decodeIfPresent([String].self, forKey: .historicalContextNotes) ?? []
+        self.aiInferences = try c.decodeIfPresent([String].self, forKey: .aiInferences) ?? []
     }
 }
 
-/// 4. NoteRevision（笔记版本，支持 AI 生成与用户编辑隔离，PRD 8.3）
+/// 4. NoteRevision（笔记版本，支持 AI 生成与用户编辑隔离，PRD 8.3 & P1-4 版本溯源）
 public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var noteId: UUID
@@ -482,6 +522,10 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
     public var content: StructuredNoteContent
     public var origin: RevisionOrigin
     public var previousRevisionId: UUID?
+    /// 生成本版摘要时所依据的逐字稿指纹（用于识别重新转写后摘要是否仍基于旧稿，P1-4）
+    public var sourceTranscriptDigest: String?
+    /// 生成本版摘要时逐字稿是否已人工校对
+    public var basedOnTranscriptReviewed: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -490,7 +534,9 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
         generatedAt: Date = Date(),
         content: StructuredNoteContent,
         origin: RevisionOrigin,
-        previousRevisionId: UUID? = nil
+        previousRevisionId: UUID? = nil,
+        sourceTranscriptDigest: String? = nil,
+        basedOnTranscriptReviewed: Bool? = nil
     ) {
         self.id = id
         self.noteId = noteId
@@ -499,6 +545,8 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
         self.content = content
         self.origin = origin
         self.previousRevisionId = previousRevisionId
+        self.sourceTranscriptDigest = sourceTranscriptDigest
+        self.basedOnTranscriptReviewed = basedOnTranscriptReviewed
     }
 }
 
@@ -1000,6 +1048,290 @@ public struct ProcessingJob: Identifiable, Codable, Equatable, Sendable {
         self.errorCode = errorCode
         self.attempts = attempts
         self.updatedAt = updatedAt
+    }
+}
+
+// MARK: - P1 Deep Links, Version Provenance, Personal Memory & Grounded QA Models
+
+/// P1-4：评估当前逐字稿审核状态与 AI 摘要的版本对齐关系
+public struct NoteVersionProvenance: Equatable, Sendable {
+    public let transcriptReviewStatusCode: String
+    public let transcriptReviewDisplayTitle: String
+    public let isSummaryBasedOnOlderTranscript: Bool
+    public let summaryAlignmentCode: String
+    public let summaryAlignmentDisplayTitle: String
+
+    public static func transcriptDigest(for segments: [TranscriptSegment]) -> String {
+        let joined = segments.map { "\($0.startMs)-\($0.endMs):\($0.text)" }.joined(separator: "\n")
+        var hash: UInt64 = 14695981039346656037
+        for byte in joined.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    public static func evaluate(
+        recording: Recording,
+        revision: NoteRevision,
+        segments: [TranscriptSegment]
+    ) -> NoteVersionProvenance {
+        let currentDigest = transcriptDigest(for: segments)
+        var stale = false
+        if recording.processingStatus == .transcriptNeedsReview {
+            stale = true
+        } else if let revDigest = revision.sourceTranscriptDigest,
+                  !revDigest.isEmpty,
+                  !segments.isEmpty,
+                  revDigest != currentDigest {
+            stale = true
+        } else if let completedAt = recording.transcriptSource?.completedAt,
+                  revision.generatedAt.addingTimeInterval(1.0) < completedAt {
+            stale = true
+        }
+
+        let alignmentCode: String
+        let alignmentTitle: String
+        if stale {
+            alignmentCode = "stale_against_newer_transcript"
+            alignmentTitle = "摘要仍基于旧版逐字稿（逐字稿已更新或待校对）"
+        } else if recording.isTranscriptReviewed == true {
+            alignmentCode = "aligned_with_reviewed_transcript"
+            alignmentTitle = "摘要基于已校对逐字稿"
+        } else {
+            alignmentCode = "aligned_with_unreviewed_machine_draft"
+            alignmentTitle = "摘要基于未人工校对的机器稿"
+        }
+
+        return NoteVersionProvenance(
+            transcriptReviewStatusCode: recording.transcriptReviewStatusCode,
+            transcriptReviewDisplayTitle: recording.transcriptReviewDisplayTitle,
+            isSummaryBasedOnOlderTranscript: stale,
+            summaryAlignmentCode: alignmentCode,
+            summaryAlignmentDisplayTitle: alignmentTitle
+        )
+    }
+}
+
+/// P1-3：MemoFlow 应用内双向深链解析与构造（`memoflow://recording/<UUID>?startMs=...&endMs=...&estimated=1`）
+public struct MemoFlowDeepLink: Equatable, Sendable {
+    public let recordingId: UUID
+    public let startMs: Int?
+    public let endMs: Int?
+    public let isEstimated: Bool
+
+    public init(recordingId: UUID, startMs: Int? = nil, endMs: Int? = nil, isEstimated: Bool = false) {
+        self.recordingId = recordingId
+        self.startMs = startMs
+        self.endMs = endMs
+        self.isEstimated = isEstimated
+    }
+
+    public static func recordingURL(
+        recordingId: UUID,
+        startMs: Int? = nil,
+        endMs: Int? = nil,
+        isEstimated: Bool = false
+    ) -> URL? {
+        var comps = URLComponents()
+        comps.scheme = "memoflow"
+        comps.host = "recording"
+        comps.path = "/\(recordingId.uuidString)"
+        var items: [URLQueryItem] = []
+        if let startMs {
+            items.append(URLQueryItem(name: "startMs", value: String(startMs)))
+        }
+        if let endMs {
+            items.append(URLQueryItem(name: "endMs", value: String(endMs)))
+        }
+        if isEstimated {
+            items.append(URLQueryItem(name: "estimated", value: "1"))
+        }
+        if !items.isEmpty {
+            comps.queryItems = items
+        }
+        return comps.url
+    }
+
+    public static func parse(_ url: URL) -> MemoFlowDeepLink? {
+        guard url.scheme?.lowercased() == "memoflow" else { return nil }
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+
+        let host = comps.host?.lowercased() ?? ""
+        let trimmedPath = comps.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        let resolvedUUID: UUID?
+        if host == "recording", let id = UUID(uuidString: trimmedPath) {
+            resolvedUUID = id
+        } else if let hostUUID = UUID(uuidString: host) {
+            resolvedUUID = hostUUID
+        } else if let queryId = comps.queryItems?.first(where: { $0.name == "recordingId" || $0.name == "id" })?.value,
+                  let id = UUID(uuidString: queryId) {
+            resolvedUUID = id
+        } else {
+            resolvedUUID = nil
+        }
+
+        guard let recordingId = resolvedUUID else { return nil }
+
+        let startVal = comps.queryItems?.first(where: { $0.name == "startMs" || $0.name == "t" })?.value.flatMap(Int.init)
+        let endVal = comps.queryItems?.first(where: { $0.name == "endMs" })?.value.flatMap(Int.init)
+        let estRaw = comps.queryItems?.first(where: { $0.name == "estimated" })?.value?.lowercased()
+        let isEstimated = (estRaw == "1" || estRaw == "true")
+
+        return MemoFlowDeepLink(
+            recordingId: recordingId,
+            startMs: startVal,
+            endMs: endVal,
+            isEstimated: isEstimated
+        )
+    }
+}
+
+public struct DeepLinkNavigationRequest: Identifiable, Equatable, Hashable, Sendable {
+    public let id: UUID
+    public let recordingId: UUID
+    public let targetStartMs: Int?
+    public let targetEndMs: Int?
+    public let isEstimated: Bool
+
+    public init(
+        id: UUID = UUID(),
+        recordingId: UUID,
+        targetStartMs: Int?,
+        targetEndMs: Int? = nil,
+        isEstimated: Bool = false
+    ) {
+        self.id = id
+        self.recordingId = recordingId
+        self.targetStartMs = targetStartMs
+        self.targetEndMs = targetEndMs
+        self.isEstimated = isEstimated
+    }
+}
+
+public enum DeepLinkOutcome: Equatable, Sendable {
+    case opened(recordingId: UUID, targetMs: Int?, isEstimated: Bool)
+    case clampedOutOfBounds(recordingId: UUID, requestedMs: Int, clampedMs: Int)
+    case audioMissingOnDevice(recordingId: UUID, targetMs: Int?, message: String)
+    case recordingNotFound(recordingId: UUID)
+    case invalidURL(String)
+}
+
+/// P1-5：可审阅、确认、编辑和删除的个人记忆条目
+public enum PersonalMemoryCategory: String, Codable, CaseIterable, Sendable {
+    case project = "project"
+    case term = "term"
+    case person = "person"
+    case preference = "preference"
+
+    public var displayTitle: String {
+        switch self {
+        case .project: return "项目背景"
+        case .term: return "领域术语"
+        case .person: return "协作角色"
+        case .preference: return "个人习惯"
+        }
+    }
+}
+
+public enum PersonalMemoryStatus: String, Codable, CaseIterable, Sendable {
+    case pendingReview = "pending_review"
+    case confirmed = "confirmed"
+
+    public var displayTitle: String {
+        switch self {
+        case .pendingReview: return "待审阅"
+        case .confirmed: return "已确认生效"
+        }
+    }
+}
+
+public struct PersonalMemoryItem: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var category: PersonalMemoryCategory
+    public var key: String
+    public var value: String
+    public var sourceRecordingId: UUID?
+    public var sourceNotePath: String?
+    public var status: PersonalMemoryStatus
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        category: PersonalMemoryCategory,
+        key: String,
+        value: String,
+        sourceRecordingId: UUID? = nil,
+        sourceNotePath: String? = nil,
+        status: PersonalMemoryStatus = .pendingReview,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.category = category
+        self.key = key
+        self.value = value
+        self.sourceRecordingId = sourceRecordingId
+        self.sourceNotePath = sourceNotePath
+        self.status = status
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+/// P1-5：跨笔记检索与问答的实际来源引用（关联笔记路径 + 相关录音时间戳）
+public struct GroundedCitation: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var noteRelativePath: String?
+    public var noteTitle: String
+    public var recordingId: UUID?
+    public var startMs: Int?
+    public var endMs: Int?
+    public var isEstimated: Bool
+    public var excerpt: String
+
+    public init(
+        id: UUID = UUID(),
+        noteRelativePath: String? = nil,
+        noteTitle: String,
+        recordingId: UUID? = nil,
+        startMs: Int? = nil,
+        endMs: Int? = nil,
+        isEstimated: Bool = false,
+        excerpt: String
+    ) {
+        self.id = id
+        self.noteRelativePath = noteRelativePath
+        self.noteTitle = noteTitle
+        self.recordingId = recordingId
+        self.startMs = startMs
+        self.endMs = endMs
+        self.isEstimated = isEstimated
+        self.excerpt = excerpt
+    }
+}
+
+public struct GroundedQAResult: Equatable, Sendable {
+    public var question: String
+    public var answer: String
+    public var citations: [GroundedCitation]
+    public var capabilityDisclosure: String
+    public var usedCloudLLM: Bool
+
+    public init(
+        question: String,
+        answer: String,
+        citations: [GroundedCitation],
+        capabilityDisclosure: String,
+        usedCloudLLM: Bool = false
+    ) {
+        self.question = question
+        self.answer = answer
+        self.citations = citations
+        self.capabilityDisclosure = capabilityDisclosure
+        self.usedCloudLLM = usedCloudLLM
     }
 }
 

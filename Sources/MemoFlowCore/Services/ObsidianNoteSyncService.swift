@@ -367,6 +367,7 @@ public final class ObsidianNoteSyncService {
                         recording: recording,
                         note: note,
                         revision: revision,
+                        segments: segments,
                         newBlocks: newBlocks,
                         existingBinding: existingBinding,
                         isAssociatingLegacy: isAssociatingLegacy
@@ -780,9 +781,11 @@ public final class ObsidianNoteSyncService {
     }
 
     private static let managedFrontmatterKeys: Set<String> = [
-        "title", "recording_id", "date", "timezone", "source", "mode",
-        "duration", "processing_status", "review_status", "transcript_status",
-        "note_revision_id", "transcript_sha256", "audio_status", "project", "tags"
+        "title", "recording_id", "recorded_at", "date", "timezone", "source", "mode",
+        "duration", "duration_seconds", "processing_status", "review_status",
+        "transcript_status", "transcript_review_status", "summary_alignment_status",
+        "note_revision_id", "note_origin", "transcript_sha256", "audio_status",
+        "audio_sync_status", "audio_attachment", "project", "tags"
     ]
 
     public static func splitFrontmatterAndBody(_ markdown: String) -> (frontmatterLines: [String]?, body: String) {
@@ -994,6 +997,7 @@ public final class ObsidianNoteSyncService {
         recording: Recording,
         note: Note,
         revision: NoteRevision,
+        segments: [TranscriptSegment] = [],
         newBlocks: [ObsidianManagedBlockKind: String],
         existingBinding: ObsidianNoteBinding?,
         isAssociatingLegacy: Bool
@@ -1005,6 +1009,7 @@ public final class ObsidianNoteSyncService {
             recording: recording,
             note: note,
             revision: revision,
+            segments: segments,
             preservedUserTags: preserved.userTags,
             preservedCustomKeyBlocks: preserved.customKeyBlocks,
             fallbackProjectRawValue: preserved.rawProjectValue

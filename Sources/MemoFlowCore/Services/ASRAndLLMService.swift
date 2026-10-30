@@ -921,7 +921,8 @@ public final class ASRAndLLMService: Sendable {
         revisionId: UUID,
         preferences: MemoFlowPreferences,
         llmAPIKey: String?,
-        knowledgeReferences: [KnowledgeReference] = []
+        knowledgeReferences: [KnowledgeReference] = [],
+        confirmedMemories: [PersonalMemoryItem] = []
     ) async throws -> OrganizationOutput {
         let trimmedKey = (llmAPIKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -934,19 +935,24 @@ public final class ASRAndLLMService: Sendable {
                 revisionId: revisionId,
                 preferences: preferences,
                 apiKey: trimmedKey,
-                knowledgeReferences: knowledgeReferences
+                knowledgeReferences: knowledgeReferences,
+                confirmedMemories: confirmedMemories
             )
             output.noteContent.knowledgeReferences = knowledgeReferences
             return output
         } else {
             // 无 API Key 时使用本地规则引擎兜底，保证离线/自测也能完整验证 PRD 验收用例
-            return organizeLocallyWithHeuristics(
+            var output = organizeLocallyWithHeuristics(
                 recording: recording,
                 segments: segments,
                 requestedMode: requestedMode,
                 revisionId: revisionId,
-                preferences: preferences
+                preferences: preferences,
+                knowledgeReferences: knowledgeReferences,
+                confirmedMemories: confirmedMemories
             )
+            output.noteContent.knowledgeReferences = knowledgeReferences
+            return output
         }
     }
 
@@ -957,7 +963,8 @@ public final class ASRAndLLMService: Sendable {
         revisionId: UUID,
         preferences: MemoFlowPreferences,
         apiKey: String,
-        knowledgeReferences: [KnowledgeReference]
+        knowledgeReferences: [KnowledgeReference],
+        confirmedMemories: [PersonalMemoryItem]
     ) async throws -> OrganizationOutput {
         let endpoint = try Self.endpoint(baseURL: preferences.llmBaseURL, path: "chat/completions")
         guard !preferences.llmModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -991,9 +998,11 @@ public final class ASRAndLLMService: Sendable {
           "suggestedProjectName": "可选匹配的项目名或 null",
           "suggestedTitle": "简短标题",
           "summaryOrShortNote": "随手记正文 或 会议一句话摘要",
-          "backgroundPoints": ["..."],
-          "keyPoints": ["..."],
-          "decisions": ["..."],
+          "backgroundPoints": ["仅来自本次录音的必要背景"],
+          "keyPoints": ["仅来自本次录音的关键观点"],
+          "decisions": ["仅来自本次录音确认的结论"],
+          "historicalContextNotes": ["来自历史笔记或个人记忆的关联术语/旧进展说明（绝不能写进 decisions 或 actionDrafts）"],
+          "aiInferences": ["AI 延伸推测或建议（非录音原话事实，如无则填 []）"],
           "chapters": [
             {
               "title": "章节小标题",
@@ -1021,10 +1030,14 @@ public final class ASRAndLLMService: Sendable {
         """
 
         let backgroundJSON = String(data: try JSONEncoder().encode(knowledgeReferences), encoding: .utf8) ?? "[]"
+        let activeMemories = confirmedMemories.filter { $0.status == .confirmed }.map { "[\($0.category.displayTitle)] \($0.key): \($0.value)" }
+        let memoriesJSON = String(data: try JSONEncoder().encode(activeMemories), encoding: .utf8) ?? "[]"
         let userPrompt = """
         录音发生时间：\(recordingTimestampStr)
         录音时区：\(recording.recordedTimeZoneIdentifier)
         已知项目列表：\(preferences.knownProjectNames.joined(separator: "、"))
+        用户已确认的个人记忆与术语（仅供识别术语与项目，不可作为本次承诺来源）：
+        \(memoriesJSON)
         以下 JSON 是知识库历史背景（不可作为行动来源）：
         \(backgroundJSON)
         逐字稿分段：
@@ -1149,6 +1162,8 @@ public final class ASRAndLLMService: Sendable {
             let backgroundPoints: [String]?
             let keyPoints: [String]?
             let decisions: [String]?
+            let historicalContextNotes: [String]?
+            let aiInferences: [String]?
             let chapters: [RawChapter]?
             let actionDrafts: [RawDraft]?
         }
@@ -1175,14 +1190,16 @@ public final class ASRAndLLMService: Sendable {
             ? buildChaptersFromSegments(segments)
             : parsedChapters
 
-        // PRD 6.1：随手记不填充空的观点和结论章节，但保留清晰的章节划分
+        // PRD 6.1：随手记不填充空的观点和结论章节，但保留清晰的章节划分与来源隔离
         let content = StructuredNoteContent(
             suggestedTitle: (raw.suggestedTitle ?? recording.title).trimmingCharacters(in: .whitespacesAndNewlines),
             summaryOrShortNote: (raw.summaryOrShortNote ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             backgroundPoints: requestedMode == .quickNote ? [] : (raw.backgroundPoints ?? []),
             keyPoints: requestedMode == .quickNote ? [] : (raw.keyPoints ?? []),
             decisions: requestedMode == .quickNote ? [] : (raw.decisions ?? []),
-            chapters: finalChapters
+            chapters: finalChapters,
+            historicalContextNotes: raw.historicalContextNotes ?? [],
+            aiInferences: raw.aiInferences ?? []
         )
 
         let validatedDrafts: [ActionDraft] = (raw.actionDrafts ?? []).compactMap { item in
@@ -1247,7 +1264,9 @@ public final class ASRAndLLMService: Sendable {
         segments: [TranscriptSegment],
         requestedMode: NoteMode,
         revisionId: UUID,
-        preferences: MemoFlowPreferences
+        preferences: MemoFlowPreferences,
+        knowledgeReferences: [KnowledgeReference] = [],
+        confirmedMemories: [PersonalMemoryItem] = []
     ) -> OrganizationOutput {
         let fullText = segments.map(\.text).joined(separator: " ")
         let suggestedMode: NoteMode = (segments.count <= 3 && fullText.count < 120) ? .quickNote : .meetingNote
@@ -1266,7 +1285,7 @@ public final class ASRAndLLMService: Sendable {
                 keyPoints.append(line)
             }
 
-            // 识别日程或待办线索
+            // 识别日程或待办线索（严格仅遍历本次录音 segments，绝不扫描历史笔记！）
             let hasEventClue = line.contains("开会") || line.contains("评审") || line.contains("沟通") || line.contains("点到") || line.contains(":00")
             let hasTaskClue = line.contains("提交") || line.contains("交") || line.contains("整理") || line.contains("完成") || line.contains("之前") || line.contains("前交")
             let hasAmbiguousClue = line.contains("找时间") || line.contains("改天")
@@ -1304,12 +1323,33 @@ public final class ASRAndLLMService: Sendable {
             }
         }
 
+        // P1-5：整理历史笔记与已确认个人记忆作为独立「历史背景」，严格隔离于本次承诺
+        var historicalNotes: [String] = []
+        for ref in knowledgeReferences.prefix(3) {
+            let snippet = ref.excerpt
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix("---") && !$0.hasPrefix("#") } ?? ref.excerpt
+            if !snippet.isEmpty {
+                historicalNotes.append("《\(ref.title ?? ref.path)》：\(String(snippet.prefix(100)))")
+            }
+        }
+        var matchedProjectName: String? = preferences.knownProjectNames.first { fullText.localizedCaseInsensitiveContains($0) }
+        for mem in confirmedMemories where mem.status == .confirmed {
+            if fullText.localizedCaseInsensitiveContains(mem.key) {
+                historicalNotes.append("个人记忆[\(mem.category.displayTitle)] \(mem.key)：\(mem.value)")
+                if mem.category == .project && matchedProjectName == nil {
+                    matchedProjectName = mem.key
+                }
+            }
+        }
+
         let titleSource = (decisions.first ?? keyPoints.first ?? segments.first?.text ?? recording.title)
             .components(separatedBy: CharacterSet(charactersIn: "。！？；\n"))
             .first ?? recording.title
         let title = String(titleSource.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
         let generatedChapters = buildChaptersFromSegments(segments)
-        let content: StructuredNoteContent
+        var content: StructuredNoteContent
         if requestedMode == .quickNote {
             // PRD A20：随手记生成简短灵感笔记，不凑观点和待办
             content = StructuredNoteContent(
@@ -1318,7 +1358,9 @@ public final class ASRAndLLMService: Sendable {
                 backgroundPoints: [],
                 keyPoints: [],
                 decisions: [],
-                chapters: generatedChapters
+                chapters: generatedChapters,
+                historicalContextNotes: historicalNotes,
+                aiInferences: []
             )
         } else {
             content = StructuredNoteContent(
@@ -1327,13 +1369,16 @@ public final class ASRAndLLMService: Sendable {
                 backgroundPoints: [],
                 keyPoints: Array(keyPoints.prefix(4)),
                 decisions: Array(decisions.prefix(3)),
-                chapters: generatedChapters
+                chapters: generatedChapters,
+                historicalContextNotes: historicalNotes,
+                aiInferences: []
             )
         }
+        content.knowledgeReferences = knowledgeReferences
 
         return OrganizationOutput(
             suggestedMode: suggestedMode,
-            suggestedProjectName: nil,
+            suggestedProjectName: matchedProjectName,
             noteContent: content,
             actionDrafts: extractedDrafts
         )

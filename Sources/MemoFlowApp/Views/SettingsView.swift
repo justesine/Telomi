@@ -239,6 +239,16 @@ public struct SettingsView: View {
     @State private var writableReminderLists: [WritableContainerInfo] = []
     @State private var showingResetConfirmation: Bool = false
 
+    // P1-5 检索范围与个人记忆审阅管理状态
+    @State private var customIncludedFolderInput: String = ""
+    @State private var newMemoryCategory: PersonalMemoryCategory = .term
+    @State private var newMemoryKeyInput: String = ""
+    @State private var newMemoryValueInput: String = ""
+    @State private var editingMemoryId: UUID? = nil
+    @State private var editingMemoryCategory: PersonalMemoryCategory = .term
+    @State private var editingMemoryKey: String = ""
+    @State private var editingMemoryValue: String = ""
+
     public init(store: MemoFlowStore) {
         self.store = store
     }
@@ -261,6 +271,7 @@ public struct SettingsView: View {
                         speakerAndVoiceProfileCard
                         calendarSyncModeCard
                         obsidianIntegrationCard
+                        personalMemoryManagementCard
                         routingAndTimePreferencesCard
                         privacyAndPermissionsCard
                         storageAndResetCard
@@ -832,17 +843,110 @@ public struct SettingsView: View {
             .padding(10)
             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
 
-            Toggle("使用知识库背景辅助 AI 整理", isOn: $store.preferences.knowledgeContextEnabled)
-                .onChange(of: store.preferences.knowledgeContextEnabled) { _, _ in
+            Toggle("允许本机读取并建立历史笔记索引（用于本机跨笔记检索与离线规则关联）", isOn: $store.preferences.knowledgeContextEnabled)
+                .onChange(of: store.preferences.knowledgeContextEnabled) { _, enabled in
+                    if !enabled {
+                        store.preferences.allowSendingKnowledgeToCloudLLM = false
+                    }
                     store.saveToDisk()
                     Task { await store.refreshKnowledge() }
                 }
-            Text("开启后，会把最多 4 篇相关笔记的片段（每篇最多 900 字符）发送至当前 AI 服务：\(store.preferences.llmBaseURL)。本机索引最多 2000 篇、16 MB；单篇不超过 256 KB。打开应用、回到前台或整理录音时刷新。")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("不读取的文件夹（相对知识库路径，每行一个）")
+
+            Toggle("允许将命中的历史笔记片段与已确认个人记忆发送至云端 LLM", isOn: $store.preferences.allowSendingKnowledgeToCloudLLM)
+                .disabled(!store.preferences.knowledgeContextEnabled)
+                .onChange(of: store.preferences.allowSendingKnowledgeToCloudLLM) { _, _ in
+                    store.saveToDisk()
+                }
+
+            Text(
+                store.preferences.allowSendingKnowledgeToCloudLLM
+                    ? "已授权发送：整理时最多附带 4 篇相关笔记片段（单篇 ≤ 900 字符）及已确认的个人记忆至 \(store.preferences.llmBaseURL.isEmpty ? "本地规则引擎" : store.preferences.llmBaseURL)。"
+                    : "仅本机检索模式：历史笔记与个人记忆只在本机参与关键词检索和问答，不会随请求发送给云端大模型。"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            // P1-5 可选择的检索文件夹范围管理
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("限定检索文件夹范围（留空表示检索全部未排除目录）")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    if !store.preferences.knowledgeIncludedFolders.isEmpty {
+                        Button("恢复全部目录") {
+                            store.preferences.knowledgeIncludedFolders = []
+                            store.saveToDisk()
+                            Task { await store.refreshKnowledge() }
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                let candidateFolders = Array(
+                    Set(store.availableVaultTopFolders + store.preferences.knowledgeIncludedFolders)
+                ).sorted()
+
+                if !candidateFolders.isEmpty {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
+                        ForEach(candidateFolders, id: \.self) { folder in
+                            let isInc = store.preferences.knowledgeIncludedFolders.contains(folder)
+                            Button {
+                                if isInc {
+                                    store.preferences.knowledgeIncludedFolders.removeAll { $0 == folder }
+                                } else {
+                                    store.preferences.knowledgeIncludedFolders.append(folder)
+                                }
+                                store.saveToDisk()
+                                Task { await store.refreshKnowledge() }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: isInc ? "checkmark.circle.fill" : "folder")
+                                    Text(folder)
+                                        .lineLimit(1)
+                                }
+                                .font(.caption2.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 8)
+                                .background(
+                                    isInc ? MFTheme.iceBlue.opacity(0.22) : Color.secondary.opacity(0.1),
+                                    in: RoundedRectangle(cornerRadius: 8)
+                                )
+                                .foregroundStyle(isInc ? MFTheme.iceCyan : .primary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TextField("手动添加检索子目录（如 Projects/Audio）", text: $customIncludedFolderInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                    Button("加入范围") {
+                        let cleaned = customIncludedFolderInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                        guard !cleaned.isEmpty else { return }
+                        if !store.preferences.knowledgeIncludedFolders.contains(cleaned) {
+                            store.preferences.knowledgeIncludedFolders.append(cleaned)
+                            store.saveToDisk()
+                            Task { await store.refreshKnowledge() }
+                        }
+                        customIncludedFolderInput = ""
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+
+            Text("不读取的排除文件夹（相对知识库路径，每行一个，优先级高于包含范围）")
                 .font(.caption)
             TextEditor(text: $store.preferences.knowledgeExcludedFolders)
-                .frame(height: 65)
+                .frame(height: 60)
                 .onChange(of: store.preferences.knowledgeExcludedFolders) { _, _ in store.saveToDisk() }
             Text("自动排除隐藏目录和 MemoFlow 导出目录，避免重复引用自己的整理结果。")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -888,6 +992,159 @@ public struct SettingsView: View {
                 .onChange(of: store.preferences.autoExportToObsidianOnComplete) { _, _ in
                     store.saveToDisk()
                 }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 5b. Personal Memory Review & Management Card (P1-5)
+
+    private var personalMemoryManagementCard: some View {
+        let pendingCount = store.personalMemories.filter { $0.status == .pendingReview }.count
+        let confirmedCount = store.personalMemories.filter { $0.status == .confirmed }.count
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("个人记忆审阅与术语库管理", systemImage: "brain.head.profile")
+                    .font(.subheadline.weight(.bold))
+                Spacer()
+                if pendingCount > 0 {
+                    MFBadgePill("\(pendingCount) 条待审阅", color: MFTheme.warmAmber)
+                }
+                MFBadgePill("\(confirmedCount) 条已生效", color: MFTheme.mintGreen)
+            }
+
+            Text("提取的项目背景、常用术语与协作者必须经你确认后才会生效；仅当上方开启「允许发送至云端 LLM」时才会随请求发送。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Picker("类别", selection: $newMemoryCategory) {
+                    ForEach(PersonalMemoryCategory.allCases, id: \.self) { cat in
+                        Text(cat.displayTitle).tag(cat)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 110)
+
+                TextField("词条 / 术语 / 项目名", text: $newMemoryKeyInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+
+                TextField("背景说明（如：Denon DR-F2 磁带卡座）", text: $newMemoryValueInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+
+                Button("新增生效") {
+                    _ = store.addPersonalMemory(
+                        category: newMemoryCategory,
+                        key: newMemoryKeyInput,
+                        value: newMemoryValueInput,
+                        status: .confirmed
+                    )
+                    newMemoryKeyInput = ""
+                    newMemoryValueInput = ""
+                }
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .disabled(newMemoryKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if store.personalMemories.isEmpty {
+                Text("暂无个人记忆词条。可在任意录音详情页右上角菜单点击「提取待审阅个人记忆候选」或在上方手动添加。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(store.personalMemories) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if editingMemoryId == item.id {
+                                HStack(spacing: 8) {
+                                    Picker("类别", selection: $editingMemoryCategory) {
+                                        ForEach(PersonalMemoryCategory.allCases, id: \.self) { cat in
+                                            Text(cat.displayTitle).tag(cat)
+                                        }
+                                    }
+                                    .frame(width: 105)
+
+                                    TextField("词条名", text: $editingMemoryKey)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.caption)
+
+                                    TextField("说明", text: $editingMemoryValue)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.caption)
+
+                                    Button("保存") {
+                                        store.updatePersonalMemory(
+                                            id: item.id,
+                                            category: editingMemoryCategory,
+                                            key: editingMemoryKey,
+                                            value: editingMemoryValue,
+                                            status: .confirmed
+                                        )
+                                        editingMemoryId = nil
+                                    }
+                                    .font(.caption2.weight(.semibold))
+                                    .buttonStyle(.borderedProminent)
+
+                                    Button("取消") {
+                                        editingMemoryId = nil
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.plain)
+                                }
+                            } else {
+                                HStack(alignment: .center, spacing: 8) {
+                                    MFBadgePill(
+                                        item.category.displayTitle,
+                                        color: MFTheme.iceCyan
+                                    )
+                                    Text(item.key)
+                                        .font(.caption.weight(.bold))
+                                    if !item.value.isEmpty {
+                                        Text("— \(item.value)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    Spacer()
+                                    MFBadgePill(
+                                        item.status.displayTitle,
+                                        color: item.status == .confirmed ? MFTheme.mintGreen : MFTheme.warmAmber
+                                    )
+                                    if item.status == .pendingReview {
+                                        Button("确认") {
+                                            store.confirmPersonalMemory(item.id)
+                                        }
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(MFTheme.mintGreen)
+                                        .buttonStyle(.plain)
+                                    }
+                                    Button("编辑") {
+                                        editingMemoryId = item.id
+                                        editingMemoryCategory = item.category
+                                        editingMemoryKey = item.key
+                                        editingMemoryValue = item.value
+                                    }
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.iceCyan)
+                                    .buttonStyle(.plain)
+
+                                    Button("删除", role: .destructive) {
+                                        store.deletePersonalMemory(item.id)
+                                    }
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.coralRed)
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }

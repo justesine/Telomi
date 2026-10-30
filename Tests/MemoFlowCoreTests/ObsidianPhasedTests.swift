@@ -333,4 +333,297 @@ final class ObsidianPhasedTests: XCTestCase {
         XCTAssertEqual(store.obsidianBindingsByRecording[rec.id]?.status, .authorizationExpired)
         store.preferences.obsidianVaultBookmark = validBookmark
     }
+
+    // MARK: - P1-3: 双向打开笔记与录音、时间戳跳转与异常边界
+
+    @MainActor
+    func testP1_3_BidirectionalNavigationClickableTimestampsAndEdgeCases() throws {
+        let (rootDir, vaultDir, store) = try makeIsolatedEnvironment()
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        let rec = try XCTUnwrap(store.recordings.first)
+        let segs = try XCTUnwrap(store.segmentsByRecording[rec.id])
+        XCTAssertFalse(segs.isEmpty)
+
+        // 添加书签与高亮批注后导出到 Obsidian
+        store.addBookmarkMark(recordingId: rec.id, atMs: 5000, quote: "关键书签原话", note: "跟进硬件调试", kind: "bookmark")
+        store.setHighlight(recordingId: rec.id, segment: segs[0], note: "重点高亮核对")
+
+        let exported = try store.saveNoteDirectlyToObsidian(for: rec.id)
+        let md = try String(contentsOf: exported.fileURL, encoding: .utf8)
+
+        // 1) 验证原话、章节、高亮、书签均带可点击 memoflow:// 时间戳链接
+        XCTAssertTrue(md.contains("memoflow://recording/\(rec.id.uuidString)?startMs="))
+        XCTAssertTrue(md.contains("memoflow://recording/\(rec.id.uuidString)?startMs=5000"))
+
+        // 2) 点击一条原话深链 -> 打开对应录音并精确定位
+        let targetJumpURL = try XCTUnwrap(
+            MemoFlowDeepLink.recordingURL(recordingId: rec.id, startMs: 6000, endMs: 12000)
+        )
+        let jumpOutcome = store.handleIncomingURL(targetJumpURL)
+        XCTAssertEqual(jumpOutcome, .opened(recordingId: rec.id, targetMs: 6000, isEstimated: false))
+        XCTAssertEqual(store.activeDeepLinkRequest?.recordingId, rec.id)
+        XCTAssertEqual(store.activeDeepLinkRequest?.targetStartMs, 6000)
+        XCTAssertEqual(store.activeDeepLinkRequest?.targetEndMs, 12000)
+        store.audioService.stopPlayback()
+
+        // 3) 从 MemoFlow 打开固定 Obsidian 笔记（含笔记被重命名/移动后的重定位）
+        let movedDir = vaultDir.appendingPathComponent("Archive/2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: movedDir, withIntermediateDirectories: true)
+        let movedFile = movedDir.appendingPathComponent("双向跳转重命名测试.md")
+        try FileManager.default.moveItem(at: exported.fileURL, to: movedFile)
+
+        let obsOpenURL = try store.openBoundObsidianNoteURL(for: rec.id)
+        XCTAssertEqual(obsOpenURL.scheme, "obsidian")
+        XCTAssertTrue(obsOpenURL.absoluteString.contains("Archive%2F2026%2F") || obsOpenURL.absoluteString.contains("Archive/2026/"))
+        XCTAssertEqual(store.obsidianBindingsByRecording[rec.id]?.vaultRelativePath, "Archive/2026/双向跳转重命名测试.md")
+
+        // 4) 异常边界：录音缺失、时间越界、真实音频缺失
+        let missingId = UUID()
+        let missingURL = try XCTUnwrap(MemoFlowDeepLink.recordingURL(recordingId: missingId, startMs: 1000))
+        XCTAssertEqual(store.handleIncomingURL(missingURL), .recordingNotFound(recordingId: missingId))
+        XCTAssertNotNil(store.activeDeepLinkAlert)
+
+        let outOfBoundsURL = try XCTUnwrap(MemoFlowDeepLink.recordingURL(recordingId: rec.id, startMs: 99_999_000))
+        let clampedOutcome = store.handleIncomingURL(outOfBoundsURL)
+        if case .clampedOutOfBounds(let rId, let reqMs, let clampedMs) = clampedOutcome {
+            XCTAssertEqual(rId, rec.id)
+            XCTAssertEqual(reqMs, 99_999_000)
+            XCTAssertLessThanOrEqual(clampedMs, Int(rec.duration * 1000))
+        } else {
+            XCTFail("Expected clampedOutOfBounds, got \(clampedOutcome)")
+        }
+        store.audioService.stopPlayback()
+
+        // 模拟非 demo 真实录音缺失本地音频文件 -> 不伪造假音频，明确提示缺失
+        let missingAudioRecId = UUID()
+        let missingAudioRec = Recording(
+            id: missingAudioRecId,
+            title: "缺失本地音频的录音",
+            duration: 30,
+            localAudioFileName: "nonexistent_real_audio_\(missingAudioRecId.uuidString).m4a"
+        )
+        store.recordings.insert(missingAudioRec, at: 0)
+        let missingAudioURL = try XCTUnwrap(MemoFlowDeepLink.recordingURL(recordingId: missingAudioRecId, startMs: 3000))
+        let audioMissingOutcome = store.handleIncomingURL(missingAudioURL)
+        if case .audioMissingOnDevice(let rId, let tMs, _) = audioMissingOutcome {
+            XCTAssertEqual(rId, missingAudioRecId)
+            XCTAssertEqual(tMs, 3000)
+        } else {
+            XCTFail("Expected audioMissingOnDevice, got \(audioMissingOutcome)")
+        }
+
+        // 5) 估算时间戳标明「约」，不可核验来源绝不伪造深链
+        let estimatedBadge = MarkdownExporterService.formatVerifiableTimestampLink(
+            recording: rec,
+            startMs: 15000,
+            endMs: 20000,
+            isEstimated: true,
+            rangeDisplay: true
+        )
+        XCTAssertTrue(estimatedBadge.contains("[约 00:00:15 - 00:00:20](memoflow://recording/\(rec.id.uuidString)?startMs=15000&endMs=20000&estimated=1)"))
+
+        let unverifiableRec = Recording(title: "无音频源", duration: 10, localAudioFileName: "")
+        let unverifiableBadge = MarkdownExporterService.formatVerifiableTimestampLink(
+            recording: unverifiableRec,
+            startMs: 5000,
+            isEstimated: false,
+            rangeDisplay: false
+        )
+        XCTAssertTrue(unverifiableBadge.contains("来源待核验"))
+        XCTAssertFalse(unverifiableBadge.contains("memoflow://"))
+    }
+
+    // MARK: - P1-4: 完善导出内容与版本标识
+
+    @MainActor
+    func testP1_4_ExportedProvenanceReviewStatusProjectWikiLinkAndMarks() throws {
+        let (rootDir, _, store) = try makeIsolatedEnvironment()
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        let rec = try XCTUnwrap(store.recordings.first)
+        let segs = try XCTUnwrap(store.segmentsByRecording[rec.id])
+
+        // 关联项目并添加手动高亮批注 + 录制书签
+        let rev0 = try XCTUnwrap(store.currentRevision(for: rec.id))
+        store.saveUserEditedNote(
+            for: rec.id,
+            newTitle: rec.title,
+            newContent: rev0.content,
+            projectName: "[[模拟器材调校]]"
+        )
+        store.setHighlight(recordingId: rec.id, segment: segs[0], note: "此处需要核对偏磁参数")
+        store.addBookmarkMark(recordingId: rec.id, atMs: 8000, quote: "中频密度表现", note: "录制时打点书签", kind: "bookmark")
+
+        // 1) 默认未校对状态导出：包含完整元数据、双链项目、书签批注来源时间戳与机器稿提示
+        let export1 = try store.saveNoteDirectlyToObsidian(for: rec.id)
+        let mdUnreviewed = try String(contentsOf: export1.fileURL, encoding: .utf8)
+        XCTAssertTrue(mdUnreviewed.contains("recording_id: \"\(rec.id.uuidString)\""))
+        XCTAssertTrue(mdUnreviewed.contains("timezone: \"\(rec.recordedTimeZoneIdentifier)\""))
+        XCTAssertTrue(mdUnreviewed.contains("duration: \"\(TimeFormatting.formatDuration(rec.duration))\""))
+        XCTAssertTrue(mdUnreviewed.contains("project: \"[[模拟器材调校]]\""))
+        XCTAssertTrue(
+            mdUnreviewed.contains("transcript_review_status: \"legacy_unverified\"") ||
+            mdUnreviewed.contains("transcript_review_status: \"machine_unreviewed\"")
+        )
+        XCTAssertTrue(mdUnreviewed.contains("此处需要核对偏磁参数"))
+        XCTAssertTrue(mdUnreviewed.contains("录制时打点书签"))
+        XCTAssertTrue(mdUnreviewed.contains("memoflow://recording/\(rec.id.uuidString)?startMs=8000"))
+
+        // 2) 用户纠正关联项目并标记逐字稿已人工校对
+        store.setTranscriptReviewed(recordingId: rec.id, reviewed: true)
+        let rev1 = try XCTUnwrap(store.currentRevision(for: rec.id))
+        store.saveUserEditedNote(
+            for: rec.id,
+            newTitle: rec.title,
+            newContent: rev1.content,
+            projectName: "黑胶与磁带归档"
+        )
+        let export2 = try store.saveNoteDirectlyToObsidian(for: rec.id)
+        let mdReviewed = try String(contentsOf: export2.fileURL, encoding: .utf8)
+        XCTAssertTrue(mdReviewed.contains("project: \"[[黑胶与磁带归档]]\""))
+        XCTAssertTrue(mdReviewed.contains("transcript_review_status: \"reviewed\""))
+        XCTAssertTrue(mdReviewed.contains("逐字稿：已人工校对"))
+        XCTAssertTrue(mdReviewed.contains("本篇逐字稿已完成人工校对"))
+
+        // 3) 模拟逐字稿重新生成后尚未重新生成 AI 摘要 -> 明确标识「摘要仍基于旧版逐字稿」
+        var staleSegs = segs
+        staleSegs[0].text = "重新转写后的全新逐字稿首句内容"
+        store.segmentsByRecording[rec.id] = staleSegs
+        store.setTranscriptReviewed(recordingId: rec.id, reviewed: false)
+
+        let export3 = try store.saveNoteDirectlyToObsidian(for: rec.id)
+        let mdStale = try String(contentsOf: export3.fileURL, encoding: .utf8)
+        XCTAssertTrue(mdStale.contains("summary_alignment_status: \"stale_against_newer_transcript\""))
+        XCTAssertTrue(mdStale.contains("摘要仍基于旧版逐字稿"))
+    }
+
+    // MARK: - P1-5: 增强历史笔记检索、来源引用、三方事实隔离与个人记忆审阅授权
+
+    @MainActor
+    func testP1_5_SelectableFoldersHistoricalBoundaryGroundedQAAndPersonalMemoryConsent() async throws {
+        let (rootDir, vaultDir, store) = try makeIsolatedEnvironment()
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        // 准备两个不同子文件夹的历史笔记
+        let projectsDir = vaultDir.appendingPathComponent("Projects", isDirectory: true)
+        let personalDir = vaultDir.appendingPathComponent("PersonalDiary", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: personalDir, withIntermediateDirectories: true)
+
+        let historicalRecId = UUID()
+        let projectNote = """
+        ---
+        recording_id: "\(historicalRecId.uuidString)"
+        ---
+        # Denon 卡座维护记录
+        上次校准了磁头方位角，计划下周三采购新压带轮。
+        **[00:01:20]** 测量走带抖晃率在正常范围。
+        """
+        try projectNote.write(to: projectsDir.appendingPathComponent("Denon卡座维护.md"), atomically: true, encoding: .utf8)
+
+        let diaryNote = """
+        # 私人随笔
+        私密日记专属词条不应被限定目录外的检索读取。
+        """
+        try diaryNote.write(to: personalDir.appendingPathComponent("私人随笔.md"), atomically: true, encoding: .utf8)
+
+        // 1) 限定只检索 Projects 文件夹
+        store.preferences.knowledgeContextEnabled = true
+        store.preferences.knowledgeIncludedFolders = ["Projects"]
+        store.saveToDisk()
+        await store.refreshKnowledge()
+
+        let isolatedKnowledgeService = ObsidianKnowledgeService()
+        let projectHits = try await isolatedKnowledgeService.refresh(
+            preferences: store.preferences,
+            query: "Denon 压带轮 抖晃率"
+        ).references
+        XCTAssertEqual(projectHits.count, 1)
+        XCTAssertEqual(projectHits.first?.path, "Projects/Denon卡座维护.md")
+        XCTAssertEqual(projectHits.first?.recordingId, historicalRecId)
+        XCTAssertEqual(projectHits.first?.timestampMs, 80_000)
+
+        let diaryHits = try await isolatedKnowledgeService.refresh(
+            preferences: store.preferences,
+            query: "私密日记专属词条"
+        ).references
+        XCTAssertTrue(diaryHits.isEmpty, "未选入检索范围的文件夹不得被索引")
+
+        // 2) 验证历史笔记中的计划不会变成当前录音的新承诺/待办，且三类信息严格区分
+        let newRecId = UUID()
+        let newRec = Recording(
+            id: newRecId,
+            title: "Denon 听感记录",
+            duration: 10,
+            localAudioFileName: "demo_denon_test.wav"
+        )
+        let currentSegments = [
+            TranscriptSegment(
+                id: "seg_curr_1",
+                recordingId: newRecId,
+                startMs: 0,
+                endMs: 6000,
+                text: "今天只记录一下 Denon 卡座播放磁带的听感很温润，没有任何新采购任务。",
+                speakerName: "我"
+            )
+        ]
+        var localPrefs = store.preferences
+        localPrefs.llmBaseURL = ""
+        localPrefs.llmModelName = "local-heuristic"
+        let organized = try await ASRAndLLMService.shared.organizeTranscript(
+            recording: newRec,
+            segments: currentSegments,
+            requestedMode: .meetingNote,
+            revisionId: UUID(),
+            preferences: localPrefs,
+            llmAPIKey: nil,
+            knowledgeReferences: projectHits,
+            confirmedMemories: []
+        )
+        XCTAssertTrue(
+            organized.actionDrafts.allSatisfy { !$0.description.contains("采购新压带轮") },
+            "历史笔记中的事项绝不能自动变成当前录音的新待办"
+        )
+        XCTAssertFalse(organized.noteContent.historicalContextNotes.isEmpty)
+
+        // 3) 跨笔记检索问答：必须引用实际笔记路径与录音时间戳，并如实说明关键词检索能力范围
+        let qa = await store.askGroundedQuestion("Denon 卡座抖晃率")
+        XCTAssertFalse(qa.citations.isEmpty)
+        XCTAssertEqual(qa.citations.first?.noteRelativePath, "Projects/Denon卡座维护.md")
+        XCTAssertEqual(qa.citations.first?.recordingId, historicalRecId)
+        XCTAssertEqual(qa.citations.first?.startMs, 80_000)
+        XCTAssertTrue(qa.capabilityDisclosure.contains("关键词"))
+
+        // 4) 个人记忆：审阅、确认、编辑、删除 + 云端发送独立授权控制
+        let addedPending = try XCTUnwrap(
+            store.addPersonalMemory(
+                category: .term,
+                key: "DR-F2",
+                value: "Denon 三磁头卡座",
+                sourceRecordingId: newRecId,
+                status: .pendingReview
+            )
+        )
+        XCTAssertEqual(addedPending.status, .pendingReview)
+        store.confirmPersonalMemory(addedPending.id)
+        XCTAssertEqual(store.personalMemories.first(where: { $0.id == addedPending.id })?.status, .confirmed)
+
+        store.updatePersonalMemory(
+            id: addedPending.id,
+            category: .term,
+            key: "Denon DR-F2",
+            value: "主力水平进带磁带卡座"
+        )
+        XCTAssertEqual(store.personalMemories.first(where: { $0.id == addedPending.id })?.key, "Denon DR-F2")
+
+        store.deletePersonalMemory(addedPending.id)
+        XCTAssertFalse(store.personalMemories.contains(where: { $0.id == addedPending.id }))
+
+        // 验证默认关闭云端发送授权，且断开知识库时自动撤销本地读取与云端发送授权
+        store.preferences.allowSendingKnowledgeToCloudLLM = true
+        store.disconnectObsidianVault()
+        XCTAssertFalse(store.preferences.knowledgeContextEnabled)
+        XCTAssertFalse(store.preferences.allowSendingKnowledgeToCloudLLM)
+    }
 }

@@ -2,20 +2,41 @@ import Foundation
 
 extension MarkdownExporterService {
     public static func renderTranscript(recording: Recording, segments: [TranscriptSegment]) -> String {
-        var lines = ["# \(recording.title)", "", "录音 ID：\(recording.id.uuidString)",
-            "音频文件：\(recording.localAudioFileName)", ""]
+        var lines = [
+            "# \(recording.title)",
+            "",
+            "录音 ID：\(recording.id.uuidString)",
+            "录音时间：\(formatISOTimestamp(recording.createdAt, timeZone: recording.recordedTimeZone))（\(recording.recordedTimeZoneIdentifier)）",
+            "时长：\(TimeFormatting.formatDuration(recording.duration))",
+            "逐字稿审核状态：\(recording.transcriptReviewDisplayTitle)",
+            "音频文件：\(recording.localAudioFileName)",
+            ""
+        ]
         if let source = recording.transcriptSource {
             lines += ["音频 SHA-256：\(source.sha256)", "转写引擎：\(source.engine)", ""]
         } else { lines += ["历史逐字稿未校验音频来源，请回听核查。", ""] }
         lines += ["## 书签与批注", ""]
         for mark in recording.marks ?? [] {
-            lines.append("- [\(TimeFormatting.formatMilliseconds(mark.startMs))] \(mark.quote)")
+            let link = formatVerifiableTimestampLink(
+                recording: recording,
+                startMs: mark.startMs,
+                endMs: mark.endMs,
+                isEstimated: false,
+                rangeDisplay: false
+            )
+            lines.append("- \(link) \(mark.quote)")
             if !mark.note.isEmpty { lines.append("  批注：\(mark.note)") }
         }
         lines += ["", "## 逐字稿", ""]
         for segment in segments {
-            let estimated = segment.timingIsEstimated == true ? "约 " : ""
-            lines += ["[\(estimated)\(segment.formattedTimeRange)] \(segment.effectiveSpeakerDisplay)：\(segment.text)", ""]
+            let link = formatVerifiableTimestampLink(
+                recording: recording,
+                startMs: segment.startMs,
+                endMs: segment.endMs,
+                isEstimated: segment.timingIsEstimated == true,
+                rangeDisplay: true
+            )
+            lines += ["\(link) \(segment.effectiveSpeakerDisplay)：\(segment.text)", ""]
         }
         return lines.joined(separator: "\n")
     }
@@ -148,11 +169,75 @@ public enum MarkdownExporterService {
         return raw.isEmpty ? nil : raw
     }
 
+    public static func formatISOTimestamp(_ date: Date, timeZone: TimeZone) -> String {
+        let iso = ISO8601DateFormatter()
+        iso.timeZone = timeZone
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.string(from: date)
+    }
+
+    /// 生成可点击的 `memoflow://` 时间戳深链：
+    /// - 估算时间戳明确标注「约」并附带 `estimated=1`
+    /// - 当音频来源不可核验（如缺少音频文件名、负值、超出录音总时长）时绝不伪造精确定位链接，如实标记为 `[来源待核验]`
+    public static func formatVerifiableTimestampLink(
+        recording: Recording,
+        startMs: Int?,
+        endMs: Int? = nil,
+        isEstimated: Bool = false,
+        rangeDisplay: Bool = false,
+        kindPrefix: String? = nil
+    ) -> String {
+        let hasAudioSource = !recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let maxAllowedMs = Int(ceil(max(0, recording.duration) * 1000)) + 1000
+        guard hasAudioSource,
+              let start = startMs,
+              start >= 0,
+              (recording.duration <= 0 || start <= maxAllowedMs) else {
+            if let kindPrefix, !kindPrefix.isEmpty {
+                return "[\(kindPrefix) · 来源待核验]"
+            }
+            return "[来源待核验]"
+        }
+
+        let validEnd: Int?
+        if let end = endMs, end > start {
+            validEnd = (recording.duration > 0) ? min(end, maxAllowedMs) : end
+        } else {
+            validEnd = nil
+        }
+
+        let estPrefix = isEstimated ? "约 " : ""
+        let timeText: String
+        if rangeDisplay, let end = validEnd {
+            timeText = "\(estPrefix)\(TimeFormatting.formatMilliseconds(start)) - \(TimeFormatting.formatMilliseconds(end))"
+        } else {
+            timeText = "\(estPrefix)\(TimeFormatting.formatMilliseconds(start))"
+        }
+
+        let label: String
+        if let kindPrefix, !kindPrefix.isEmpty {
+            label = "\(kindPrefix) · \(timeText)"
+        } else {
+            label = timeText
+        }
+
+        if let deepURL = MemoFlowDeepLink.recordingURL(
+            recordingId: recording.id,
+            startMs: start,
+            endMs: validEnd,
+            isEstimated: isEstimated
+        ) {
+            return "[\(label)](\(deepURL.absoluteString))"
+        }
+        return "[\(label)]"
+    }
+
     /// 生成 YAML Frontmatter 行（支持合并保留用户在 Obsidian 中自定义的标签与额外属性）
     public static func renderFrontmatterLines(
         recording: Recording,
         note: Note,
         revision: NoteRevision,
+        segments: [TranscriptSegment] = [],
         preservedUserTags: [String] = [],
         preservedCustomKeyBlocks: [[String]] = [],
         fallbackProjectRawValue: String? = nil
@@ -163,9 +248,11 @@ public enum MarkdownExporterService {
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
         let dateStr = dateFormatter.string(from: recording.createdAt)
+        let isoRecordedAt = formatISOTimestamp(recording.createdAt, timeZone: recording.recordedTimeZone)
         let durationStr = TimeFormatting.formatDuration(recording.duration)
         let modeTag = (revision.mode == .quickNote) ? "随手记" : "会议"
         let title = exportTitle(recording: recording, revision: revision)
+        let provenance = NoteVersionProvenance.evaluate(recording: recording, revision: revision, segments: segments)
 
         var mergedTags: [String] = ["录音笔记", modeTag]
         for tag in note.manualTags + preservedUserTags {
@@ -180,13 +267,18 @@ public enum MarkdownExporterService {
         lines.append("---")
         lines.append("title: \(escapeYAML(title))")
         lines.append("recording_id: \(escapeYAML(recording.id.uuidString))")
+        lines.append("recorded_at: \(escapeYAML(isoRecordedAt))")
         lines.append("date: \(escapeYAML(dateStr))")
         lines.append("timezone: \(escapeYAML(recording.recordedTimeZoneIdentifier))")
         lines.append("source: MemoFlow")
         lines.append("mode: \(modeTag)")
         lines.append("duration: \(escapeYAML(durationStr))")
+        lines.append("duration_seconds: \(Int(recording.duration.rounded()))")
         lines.append("processing_status: \(escapeYAML(recording.processingStatus.rawValue))")
+        lines.append("transcript_review_status: \(escapeYAML(provenance.transcriptReviewStatusCode))")
+        lines.append("summary_alignment_status: \(escapeYAML(provenance.summaryAlignmentCode))")
         lines.append("note_revision_id: \(escapeYAML(revision.id.uuidString))")
+        lines.append("note_origin: \(escapeYAML(revision.origin.rawValue))")
         if let projLink = formatProjectWikiLink(note.projectName) {
             lines.append("project: \(escapeYAML(projLink))")
         } else if let fallback = fallbackProjectRawValue, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -216,43 +308,54 @@ public enum MarkdownExporterService {
         var blocks: [ObsidianManagedBlockKind: String] = [:]
         let title = exportTitle(recording: recording, revision: revision)
         let content = revision.content
+        let provenance = NoteVersionProvenance.evaluate(recording: recording, revision: revision, segments: segments)
+        let isoRecordedAt = formatISOTimestamp(recording.createdAt, timeZone: recording.recordedTimeZone)
 
-        // 1. Header 区块
-        var headerLines: [String] = ["# \(title)"]
+        // 1. Header 区块（完整导出录音 ID、时间与时区、时长、关联项目双链、逐字稿审核状态与版本对齐说明）
+        var headerLines: [String] = ["# \(title)", ""]
+        var metaParts: [String] = [
+            "录音 ID：`\(recording.id.uuidString)`",
+            "时间：\(isoRecordedAt)（\(recording.recordedTimeZoneIdentifier)）",
+            "时长：\(TimeFormatting.formatDuration(recording.duration))",
+            "逐字稿：\(provenance.transcriptReviewDisplayTitle)"
+        ]
         if let projLink = formatProjectWikiLink(note.projectName) {
-            headerLines.append("")
-            headerLines.append("> 关联项目：\(projLink) · 时长：\(TimeFormatting.formatDuration(recording.duration)) · 时区：\(recording.recordedTimeZoneIdentifier)")
+            metaParts.insert("关联项目：\(projLink)", at: 1)
         }
-        if recording.processingStatus == .transcriptNeedsReview {
+        if !recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let openRecURL = MemoFlowDeepLink.recordingURL(recordingId: recording.id) {
+            metaParts.append("[在 MemoFlow 打开录音](\(openRecURL.absoluteString))")
+        }
+        headerLines.append("> " + metaParts.joined(separator: " · "))
+
+        if provenance.isSummaryBasedOnOlderTranscript {
             headerLines.append("")
-            headerLines.append("> [!WARNING] 逐字稿待校对：当前机器逐字稿尚未人工听校，AI 摘要仍基于上一版逐字稿。")
+            headerLines.append("> [!WARNING] 摘要与逐字稿版本未对齐：\(provenance.summaryAlignmentDisplayTitle)。当前逐字稿审核状态为「\(provenance.transcriptReviewDisplayTitle)」，请先回听校对并重新整理，勿直接将旧版摘要当作最终结论。")
+        } else if recording.isTranscriptReviewed != true {
+            headerLines.append("")
+            headerLines.append("> [!NOTE] 审核状态说明：当前逐字稿为「\(provenance.transcriptReviewDisplayTitle)」，摘要状态为「\(provenance.summaryAlignmentDisplayTitle)」。")
+        } else {
+            headerLines.append("")
+            headerLines.append("> [!TIP] 已审核确认：本篇逐字稿已完成人工校对，摘要版本与当前逐字稿一致。")
         }
         blocks[.header] = headerLines.joined(separator: "\n")
 
-        // 2. Summary 区块
+        // 2. Summary 区块（严格区分：本次录音内容 / 历史笔记关联背景 / AI 推断建议）
         var summaryLines: [String] = []
-        if !content.knowledgeReferences.isEmpty {
-            summaryLines.append("## 提供给 AI 的知识库背景")
-            summaryLines.append("以下笔记片段用于辅助理解，不代表本次录音的新承诺。")
-            for reference in content.knowledgeReferences {
-                summaryLines.append("- \(reference.path)")
-            }
-            summaryLines.append("")
-        }
-
         if revision.mode == .quickNote {
             if !content.summaryOrShortNote.isEmpty {
-                summaryLines.append("## 核心总结")
+                summaryLines.append("## 核心总结（本次录音）")
                 summaryLines.append(content.summaryOrShortNote)
+                summaryLines.append("")
             }
         } else {
             if !content.summaryOrShortNote.isEmpty {
-                summaryLines.append("## 一句话摘要")
+                summaryLines.append("## 一句话摘要（本次录音）")
                 summaryLines.append(content.summaryOrShortNote)
                 summaryLines.append("")
             }
             if !content.backgroundPoints.isEmpty {
-                summaryLines.append("## 必要背景")
+                summaryLines.append("## 必要背景（本次录音）")
                 for item in content.backgroundPoints {
                     summaryLines.append("- \(item)")
                 }
@@ -273,6 +376,36 @@ public enum MarkdownExporterService {
                 summaryLines.append("")
             }
         }
+
+        if !content.historicalContextNotes.isEmpty || !content.knowledgeReferences.isEmpty {
+            summaryLines.append("## 历史笔记关联背景（非本次录音新承诺）")
+            summaryLines.append("> 以下内容来自 Obsidian 历史笔记检索，仅作术语与项目背景参考，不自动生成本次待办或承诺。")
+            for hist in content.historicalContextNotes {
+                summaryLines.append("- [历史笔记背景] \(hist)")
+            }
+            for reference in content.knowledgeReferences {
+                let wikiTarget = reference.path.lowercased().hasSuffix(".md")
+                    ? String(reference.path.dropLast(3))
+                    : reference.path
+                if let recId = reference.recordingId,
+                   let ts = reference.timestampMs,
+                   let jumpURL = MemoFlowDeepLink.recordingURL(recordingId: recId, startMs: ts) {
+                    summaryLines.append("- 来源笔记：[[\(wikiTarget)]] · 关联录音：[\(TimeFormatting.formatMilliseconds(ts))](\(jumpURL.absoluteString))")
+                } else {
+                    summaryLines.append("- 来源笔记：[[\(wikiTarget)]]")
+                }
+            }
+            summaryLines.append("")
+        }
+
+        if !content.aiInferences.isEmpty {
+            summaryLines.append("## AI 延伸推测与建议（非录音原话事实）")
+            for inf in content.aiInferences {
+                summaryLines.append("- [AI 推测] \(inf)")
+            }
+            summaryLines.append("")
+        }
+
         blocks[.summary] = summaryLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 3. Actions 区块
@@ -284,30 +417,40 @@ public enum MarkdownExporterService {
         if !visibleConfirmed.isEmpty || !unconfirmedActiveDrafts.isEmpty {
             var actionLines: [String] = ["## 行动记录"]
             for action in visibleConfirmed {
-                actionLines.append(formatActionLine(action, recordingTimeZone: recording.recordedTimeZone))
+                actionLines.append(formatActionLine(action, recording: recording, segments: segments))
             }
             for draft in unconfirmedActiveDrafts {
-                actionLines.append(formatPendingDraftLine(draft, recordingTimeZone: recording.recordedTimeZone))
+                actionLines.append(formatPendingDraftLine(draft, recording: recording, segments: segments))
             }
             blocks[.actions] = actionLines.joined(separator: "\n")
         } else {
             blocks[.actions] = ""
         }
 
-        // 4. Marks 区块（手动高亮、批注与录制书签）
+        // 4. Marks 区块（手动高亮、批注与录制书签，带可点击深链与稳定标记 ID）
         let marks = recording.marks ?? []
         if !marks.isEmpty {
             var markLines: [String] = ["## 书签与高亮批注"]
             for mark in marks {
-                let kindLabel = (mark.kind == "highlight") ? "高亮" : "书签"
-                let timeLabel: String
-                if let endMs = mark.endMs, endMs > mark.startMs {
-                    timeLabel = "\(TimeFormatting.formatMilliseconds(mark.startMs)) - \(TimeFormatting.formatMilliseconds(endMs))"
-                } else {
-                    timeLabel = TimeFormatting.formatMilliseconds(mark.startMs)
+                let kindLabel: String
+                switch mark.kind {
+                case "highlight": kindLabel = "高亮"
+                case "note": kindLabel = "批注"
+                default: kindLabel = "书签"
                 }
+                let isEst = segments.first(where: { $0.startMs == mark.startMs })?.timingIsEstimated == true
+                let linkPart = formatVerifiableTimestampLink(
+                    recording: recording,
+                    startMs: mark.startMs,
+                    endMs: mark.endMs,
+                    isEstimated: isEst,
+                    rangeDisplay: (mark.endMs ?? 0) > mark.startMs,
+                    kindPrefix: kindLabel
+                )
                 let quotePart = mark.quote.isEmpty ? "" : " \(mark.quote)"
-                markLines.append("- [\(kindLabel) · \(timeLabel)]\(quotePart)")
+                let endMeta = mark.endMs.map { ";end_ms=\($0)" } ?? ""
+                let metaComment = " <!-- memoflow:mark_id=\(mark.id.uuidString);kind=\(mark.kind);start_ms=\(mark.startMs)\(endMeta) -->"
+                markLines.append("- \(linkPart)\(quotePart)\(metaComment)")
                 if !mark.note.isEmpty {
                     markLines.append("  - 批注：\(mark.note)")
                 }
@@ -317,7 +460,7 @@ public enum MarkdownExporterService {
             blocks[.marks] = ""
         }
 
-        // 5. Chapters 区块
+        // 5. Chapters 区块（带可点击时间戳区间深链）
         let resolvedChapters: [NoteChapter] = {
             if !content.chapters.isEmpty {
                 return content.chapters
@@ -328,7 +471,16 @@ public enum MarkdownExporterService {
             var chapterLines: [String] = ["## 录音章节"]
             for (index, chapter) in resolvedChapters.enumerated() {
                 let numStr = String(format: "%02d", index + 1)
-                chapterLines.append("### \(numStr). [\(chapter.formattedTimeRange)] \(chapter.title)")
+                let overlappingSegs = segments.filter { $0.startMs < chapter.endMs && $0.endMs > chapter.startMs }
+                let chapterIsEstimated = !overlappingSegs.isEmpty && overlappingSegs.allSatisfy { $0.timingIsEstimated == true }
+                let chapterLink = formatVerifiableTimestampLink(
+                    recording: recording,
+                    startMs: chapter.startMs,
+                    endMs: chapter.endMs,
+                    isEstimated: chapterIsEstimated,
+                    rangeDisplay: true
+                )
+                chapterLines.append("### \(numStr). \(chapterLink) \(chapter.title)")
                 chapterLines.append(chapter.summary)
                 if index < resolvedChapters.count - 1 {
                     chapterLines.append("")
@@ -339,13 +491,19 @@ public enum MarkdownExporterService {
             blocks[.chapters] = ""
         }
 
-        // 6. Transcript 区块
+        // 6. Transcript 区块（逐句可点击定位回听，估算时间标「约」，不可核验不伪造链接）
         if !segments.isEmpty {
             var transcriptLines: [String] = ["## 逐字稿"]
             for seg in segments {
                 let speakerPrefix = (seg.speakerName?.isEmpty == false) ? "**\(seg.speakerName!)**: " : ""
-                let estPrefix = (seg.timingIsEstimated == true) ? "约 " : ""
-                transcriptLines.append("- [\(estPrefix)\(seg.formattedStartTime)] \(speakerPrefix)\(seg.text)")
+                let segLink = formatVerifiableTimestampLink(
+                    recording: recording,
+                    startMs: seg.startMs,
+                    endMs: seg.endMs,
+                    isEstimated: seg.timingIsEstimated == true,
+                    rangeDisplay: false
+                )
+                transcriptLines.append("- \(segLink) \(speakerPrefix)\(seg.text)")
             }
             blocks[.transcript] = transcriptLines.joined(separator: "\n")
         } else {
@@ -363,7 +521,12 @@ public enum MarkdownExporterService {
         segments: [TranscriptSegment],
         pendingDrafts: [ActionDraft] = []
     ) -> String {
-        let frontmatter = renderFrontmatterLines(recording: recording, note: note, revision: revision)
+        let frontmatter = renderFrontmatterLines(
+            recording: recording,
+            note: note,
+            revision: revision,
+            segments: segments
+        )
         let blocks = renderManagedBlocks(
             recording: recording,
             note: note,
@@ -416,10 +579,40 @@ public enum MarkdownExporterService {
         recordingTimeZone: TimeZone
     ) -> String {
         let snap = action.confirmedSnapshot
-        let ownerText = (snap.owner?.isEmpty == false) ? snap.owner! : "未明确"
-        let sourceTimeText = snap.evidenceStartMs.map { TimeFormatting.formatMilliseconds($0) } ?? "手动添加"
+        let fallbackRec = Recording(
+            id: action.recordingId,
+            title: "",
+            recordedTimeZoneIdentifier: recordingTimeZone.identifier,
+            duration: Double((snap.evidenceEndMs ?? snap.evidenceStartMs ?? 0) + 10_000) / 1000.0,
+            localAudioFileName: snap.evidenceStartMs != nil ? "linked.m4a" : ""
+        )
+        return formatActionLine(action, recording: fallbackRec, segments: [])
+    }
 
-        let dateSummary = formatActionDateSummary(snapshot: snap, timeZone: recordingTimeZone)
+    public static func formatActionLine(
+        _ action: ConfirmedAction,
+        recording: Recording,
+        segments: [TranscriptSegment]
+    ) -> String {
+        let snap = action.confirmedSnapshot
+        let ownerText = (snap.owner?.isEmpty == false) ? snap.owner! : "未明确"
+        let sourceTimeText: String
+        if let startMs = snap.evidenceStartMs {
+            let isEst = segments.first(where: { $0.startMs == startMs })?.timingIsEstimated == true
+            sourceTimeText = formatVerifiableTimestampLink(
+                recording: recording,
+                startMs: startMs,
+                endMs: snap.evidenceEndMs,
+                isEstimated: isEst,
+                rangeDisplay: false
+            )
+        } else if snap.evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sourceTimeText = "手动添加"
+        } else {
+            sourceTimeText = "[来源待核验]"
+        }
+
+        let dateSummary = formatActionDateSummary(snapshot: snap, timeZone: recording.recordedTimeZone)
 
         switch action.primaryDestination {
         case .markdown:
@@ -444,10 +637,37 @@ public enum MarkdownExporterService {
         _ draft: ActionDraft,
         recordingTimeZone: TimeZone
     ) -> String {
+        let fallbackRec = Recording(
+            id: draft.recordingId,
+            title: "",
+            recordedTimeZoneIdentifier: recordingTimeZone.identifier,
+            duration: Double((draft.evidenceEndMs ?? draft.evidenceStartMs ?? 0) + 10_000) / 1000.0,
+            localAudioFileName: draft.evidenceStartMs != nil ? "linked.m4a" : ""
+        )
+        return formatPendingDraftLine(draft, recording: fallbackRec, segments: [])
+    }
+
+    public static func formatPendingDraftLine(
+        _ draft: ActionDraft,
+        recording: Recording,
+        segments: [TranscriptSegment]
+    ) -> String {
         let snap = ActionSnapshot(from: draft)
         let ownerText = (draft.owner?.isEmpty == false) ? draft.owner! : "未明确"
-        let sourceTimeText = draft.evidenceStartMs.map { TimeFormatting.formatMilliseconds($0) } ?? "未定位"
-        let dateSummary = formatActionDateSummary(snapshot: snap, timeZone: recordingTimeZone)
+        let sourceTimeText: String
+        if let startMs = draft.evidenceStartMs {
+            let isEst = segments.first(where: { draft.sourceSegmentIds.contains($0.id) || $0.startMs == startMs })?.timingIsEstimated == true
+            sourceTimeText = formatVerifiableTimestampLink(
+                recording: recording,
+                startMs: startMs,
+                endMs: draft.evidenceEndMs,
+                isEstimated: isEst,
+                rangeDisplay: false
+            )
+        } else {
+            sourceTimeText = "[来源待核验]"
+        }
+        let dateSummary = formatActionDateSummary(snapshot: snap, timeZone: recording.recordedTimeZone)
 
         if draft.ownership == .other {
             return "- [他人负责 · \(ownerText)] \(draft.description)（时间：\(dateSummary)；来源：\(sourceTimeText)）"

@@ -303,14 +303,37 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     // MARK: - Playback & Evidence Slice Playback (PRD R06, R23, A05, A22)
 
     /// 从指定毫秒位置开始播放（若传入 endMs，则播放到 endMs 自动暂停，实现「原话证据区间回听」）
-    public func play(recording: Recording, startMs: Int = 0, endMs: Int? = nil) {
-        let url = ensurePlayableDemoAudioFile(
-            named: recording.localAudioFileName,
-            durationSeconds: max(5.0, recording.duration)
-        )
+    /// 仅对内置演示样本（demo_*.wav）按需生成演示波形，真实录音缺失时如实报告错误而不伪造音频文件。
+    @Published public var lastPlaybackError: String?
+
+    @discardableResult
+    public func play(
+        recording: Recording,
+        startMs: Int = 0,
+        endMs: Int? = nil,
+        overrideFileURL: URL? = nil
+    ) -> Bool {
+        let url: URL
+        if let overrideFileURL {
+            url = overrideFileURL
+        } else if recording.localAudioFileName.hasPrefix("demo_") {
+            url = ensurePlayableDemoAudioFile(
+                named: recording.localAudioFileName,
+                durationSeconds: max(5.0, recording.duration)
+            )
+        } else {
+            url = audioFileURL(for: recording.localAudioFileName)
+        }
+
+        guard !recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              FileManager.default.fileExists(atPath: url.path) else {
+            self.isPlaying = false
+            self.lastPlaybackError = "当前设备未找到原音频文件（\(recording.localAudioFileName)），无法播放。"
+            return false
+        }
 
         do {
-            if playingRecordingId != recording.id || audioPlayer == nil {
+            if playingRecordingId != recording.id || audioPlayer == nil || audioPlayer?.url != url {
                 audioPlayer?.stop()
                 let player = try AVAudioPlayer(contentsOf: url)
                 player.prepareToPlay()
@@ -319,16 +342,25 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
                 self.totalPlaybackDurationMs = Int(max(recording.duration, player.duration) * 1000)
             }
 
-            guard let player = audioPlayer else { return }
-            let targetSeconds = max(0, min(player.duration - 0.05, Double(startMs) / 1000.0))
+            guard let player = audioPlayer else { return false }
+            let safeMaxSeconds = max(0, player.duration - 0.05)
+            let targetSeconds = max(0, min(safeMaxSeconds, Double(max(0, startMs)) / 1000.0))
             player.currentTime = targetSeconds
-            self.currentPlaybackTimeMs = Int(targetSeconds * 1000)
-            self.activeEvidenceEndMs = endMs
+            self.currentPlaybackTimeMs = Int((targetSeconds * 1000).rounded())
+            if let endMs, endMs > self.currentPlaybackTimeMs {
+                self.activeEvidenceEndMs = min(Int((player.duration * 1000).rounded()), endMs)
+            } else {
+                self.activeEvidenceEndMs = nil
+            }
+            self.lastPlaybackError = nil
             player.play()
             self.isPlaying = true
             startPlaybackTimer()
+            return true
         } catch {
             self.isPlaying = false
+            self.lastPlaybackError = "音频播放失败：\(error.localizedDescription)"
+            return false
         }
     }
 

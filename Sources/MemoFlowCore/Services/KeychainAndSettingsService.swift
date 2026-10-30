@@ -38,6 +38,10 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
     public var obsidianVaultBookmark: Data? = nil
     public var knowledgeContextEnabled: Bool = false
     public var knowledgeExcludedFolders: String = "日记\n私人"
+    /// 可选白名单：非空时仅索引与检索这些相对子目录；为空时检索所有未被排除的目录（P1-5）
+    public var knowledgeIncludedFolders: [String] = []
+    /// 是否允许将本地检索到的历史笔记片段与已确认个人记忆发送至云端 LLM（P1-5 独立授权开关，默认关闭）
+    public var allowSendingKnowledgeToCloudLLM: Bool = false
     public var defaultNoteMode: NoteMode
     public var asrEngineMode: ASREngineMode
     public var asrBaseURL: String
@@ -126,6 +130,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.obsidianVaultBookmark = try c.decodeIfPresent(Data.self, forKey: .obsidianVaultBookmark)
         self.knowledgeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .knowledgeContextEnabled) ?? false
         self.knowledgeExcludedFolders = try c.decodeIfPresent(String.self, forKey: .knowledgeExcludedFolders) ?? "日记\n私人"
+        self.knowledgeIncludedFolders = try c.decodeIfPresent([String].self, forKey: .knowledgeIncludedFolders) ?? []
+        self.allowSendingKnowledgeToCloudLLM = try c.decodeIfPresent(Bool.self, forKey: .allowSendingKnowledgeToCloudLLM) ?? false
         self.defaultNoteMode = try c.decodeIfPresent(NoteMode.self, forKey: .defaultNoteMode) ?? .quickNote
         self.asrEngineMode = try c.decodeIfPresent(ASREngineMode.self, forKey: .asrEngineMode) ?? .openAICompatible
         self.asrBaseURL = try c.decodeIfPresent(String.self, forKey: .asrBaseURL) ?? "https://api.siliconflow.cn/v1"

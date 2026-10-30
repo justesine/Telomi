@@ -35,6 +35,12 @@ public struct MemoFlowApp: App {
         WindowGroup {
             HomeView(store: store)
                 .task { await store.refreshKnowledge() }
+                .onOpenURL { incomingURL in
+                    #if os(macOS)
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    #endif
+                    _ = store.handleIncomingURL(incomingURL)
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         store.audioService.reconcileRecordingOnForeground()

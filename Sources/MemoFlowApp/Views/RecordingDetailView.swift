@@ -15,6 +15,7 @@ public struct RecordingDetailView: View {
     @ObservedObject private var audioService: AudioRecorderAndPlayerService
     let recordingId: UUID
     let initialJumpMs: Int?
+    let initialEndMs: Int?
 
     @State private var selectedTab: DetailTab = .aiNote
     @State private var isEditingNote: Bool = false
@@ -26,17 +27,27 @@ public struct RecordingDetailView: View {
     @State private var showingUnifiedReview: Bool = false
     @State private var editingSpeakerId: String? = nil
     @State private var newSpeakerNameInput: String = ""
+    @State private var showingCustomProjectAlert: Bool = false
+    @State private var customProjectNameInput: String = ""
+    @State private var showingAddBookmarkAlert: Bool = false
+    @State private var newBookmarkNoteInput: String = ""
 
     public enum DetailTab: String, CaseIterable {
         case aiNote = "AI 笔记与行动"
         case transcript = "逐字稿"
     }
 
-    public init(store: MemoFlowStore, recordingId: UUID, initialJumpMs: Int? = nil) {
+    public init(
+        store: MemoFlowStore,
+        recordingId: UUID,
+        initialJumpMs: Int? = nil,
+        initialEndMs: Int? = nil
+    ) {
         self.store = store
         self.audioService = store.audioService
         self.recordingId = recordingId
         self.initialJumpMs = initialJumpMs
+        self.initialEndMs = initialEndMs
     }
 
     private var recording: Recording? {
@@ -69,93 +80,7 @@ public struct RecordingDetailView: View {
             MFTheme.ambientTopGlow.ignoresSafeArea()
 
             if let rec = recording {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        headerMetadataSection(rec: rec)
-                        obsidianBindingAndConflictCard(rec: rec)
-                        audioPlayerCard(rec: rec)
-                        processingStatusCard(rec: rec)
-                        detailTabSwitcher
-
-                        if selectedTab == .aiNote {
-                            aiNoteAndActionsSection(rec: rec)
-                        } else {
-                            transcriptSection(rec: rec)
-                        }
-                    }
-                    .padding(18)
-                }
-                .navigationTitle(rec.title)
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        Menu {
-                            Button {
-                                let mode = note?.mode ?? store.preferences.defaultNoteMode
-                                Task {
-                                    await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
-                                }
-                            } label: {
-                                Label(store.preferences.asrEngineMode == .localWhisper
-                                      ? "重新生成机器逐字稿" : "重新转写逐字稿与AI整理",
-                                      systemImage: "waveform.badge.magnifyingglass")
-                            }
-
-                            Button {
-                                showingMarkdownSheet = true
-                            } label: {
-                                Label("导出 Markdown", systemImage: "square.and.arrow.up")
-                            }
-                            ShareLink(item: MarkdownExporterService.renderTranscript(recording: rec, segments: segments)) {
-                                Label("导出逐字稿与标记", systemImage: "text.document")
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                    }
-                }
-                .sheet(isPresented: $showingMarkdownSheet) {
-                    if let note = note, let rev = currentRevision {
-                        MarkdownExportPreviewSheet(
-                            store: store,
-                            recording: rec,
-                            note: note,
-                            revision: rev,
-                            confirmedActions: confirmedActions,
-                            segments: segments,
-                            pendingDrafts: drafts
-                        )
-                    }
-                }
-                .sheet(isPresented: $showingUnifiedReview) {
-                    NavigationStack {
-                        UnifiedReviewView(store: store)
-                    }
-                }
-                .alert("修改说话人名称", isPresented: Binding(
-                    get: { editingSpeakerId != nil },
-                    set: { if !$0 { editingSpeakerId = nil } }
-                )) {
-                    TextField("输入真实姓名或自定义昵称", text: $newSpeakerNameInput)
-                    Button("确认修改") {
-                        if let spkId = editingSpeakerId {
-                            store.updateSpeakerName(recordingId: recordingId, speakerId: spkId, newName: newSpeakerNameInput)
-                        }
-                        editingSpeakerId = nil
-                        newSpeakerNameInput = ""
-                    }
-                    Button("取消", role: .cancel) {
-                        editingSpeakerId = nil
-                        newSpeakerNameInput = ""
-                    }
-                } message: {
-                    Text("已有说话人标识时更新同组昵称；未识别说话人时只标记当前段落。")
-                }
-                .onAppear {
-                    if let jumpMs = initialJumpMs {
-                        selectedTab = .transcript
-                        audioService.play(recording: rec, startMs: jumpMs)
-                    }
-                }
+                detailLoadedContainer(rec: rec)
             } else {
                 Text("该录音记录已不存在")
                     .foregroundStyle(MFTheme.textSecondary)
@@ -163,6 +88,127 @@ public struct RecordingDetailView: View {
         }
         .focusEffectDisabled()
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
+    }
+
+    @ViewBuilder
+    private func detailLoadedContainer(rec: Recording) -> some View {
+        detailScrollView(rec: rec)
+            .navigationTitle(rec.title)
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    detailToolbarMenu(rec: rec)
+                }
+            }
+            .sheet(isPresented: $showingMarkdownSheet) {
+                if let note = note, let rev = currentRevision {
+                    MarkdownExportPreviewSheet(
+                        store: store,
+                        recording: rec,
+                        note: note,
+                        revision: rev,
+                        confirmedActions: confirmedActions,
+                        segments: segments,
+                        pendingDrafts: drafts
+                    )
+                }
+            }
+            .sheet(isPresented: $showingUnifiedReview) {
+                NavigationStack {
+                    UnifiedReviewView(store: store)
+                }
+            }
+            .modifier(detailAlertsModifier(rec: rec))
+            .onAppear {
+                if let jumpMs = initialJumpMs {
+                    selectedTab = .transcript
+                    _ = audioService.play(recording: rec, startMs: jumpMs, endMs: initialEndMs)
+                }
+            }
+            .onChange(of: store.activeDeepLinkRequest) { _, req in
+                guard let req, req.recordingId == rec.id else { return }
+                if req.targetStartMs != nil {
+                    selectedTab = .transcript
+                }
+            }
+    }
+
+    private func detailScrollView(rec: Recording) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                headerMetadataSection(rec: rec)
+                obsidianBindingAndConflictCard(rec: rec)
+                audioPlayerCard(rec: rec)
+                processingStatusCard(rec: rec)
+                detailTabSwitcher
+
+                if selectedTab == .aiNote {
+                    aiNoteAndActionsSection(rec: rec)
+                } else {
+                    transcriptSection(rec: rec)
+                }
+            }
+            .padding(18)
+        }
+    }
+
+    private func detailToolbarMenu(rec: Recording) -> some View {
+        Menu {
+            Button {
+                let mode = note?.mode ?? store.preferences.defaultNoteMode
+                Task {
+                    await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
+                }
+            } label: {
+                Label(store.preferences.asrEngineMode == .localWhisper
+                      ? "重新生成机器逐字稿" : "重新转写逐字稿与AI整理",
+                      systemImage: "waveform.badge.magnifyingglass")
+            }
+
+            Button {
+                store.setTranscriptReviewed(
+                    recordingId: rec.id,
+                    reviewed: !(rec.isTranscriptReviewed ?? false)
+                )
+            } label: {
+                Label(
+                    (rec.isTranscriptReviewed == true) ? "取消「已人工校对」标记" : "标记逐字稿为「已人工校对」",
+                    systemImage: (rec.isTranscriptReviewed == true) ? "checkmark.seal.fill" : "checkmark.seal"
+                )
+            }
+
+            Button {
+                _ = store.extractCandidateMemories(for: rec.id)
+            } label: {
+                Label("提取待审阅个人记忆候选", systemImage: "brain.head.profile")
+            }
+
+            Button {
+                showingMarkdownSheet = true
+            } label: {
+                Label("导出 Markdown", systemImage: "square.and.arrow.up")
+            }
+            ShareLink(item: MarkdownExporterService.renderTranscript(recording: rec, segments: segments)) {
+                Label("导出逐字稿与标记", systemImage: "text.document")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+    }
+
+    private func detailAlertsModifier(rec: Recording) -> DetailAlertsViewModifier {
+        DetailAlertsViewModifier(
+            store: store,
+            recording: rec,
+            editingSpeakerId: $editingSpeakerId,
+            newSpeakerNameInput: $newSpeakerNameInput,
+            showingCustomProjectAlert: $showingCustomProjectAlert,
+            customProjectNameInput: $customProjectNameInput,
+            showingAddBookmarkAlert: $showingAddBookmarkAlert,
+            newBookmarkNoteInput: $newBookmarkNoteInput,
+            onUpdateProject: { cleaned in
+                updateProjectAssociation(for: rec, projectName: cleaned)
+            }
+        )
     }
 
     private var detailTabSwitcher: some View {
@@ -212,6 +258,7 @@ public struct RecordingDetailView: View {
     @ViewBuilder
     private func headerMetadataSection(rec: Recording) -> some View {
         let currentMode = note?.mode ?? store.preferences.defaultNoteMode
+        let provenance = currentRevision.map { NoteVersionProvenance.evaluate(recording: rec, revision: $0, segments: segments) }
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -226,10 +273,36 @@ public struct RecordingDetailView: View {
                         color: rev.origin == .userEdited ? MFTheme.iceCyan : MFTheme.textSecondary
                     )
                 }
+                MFBadgePill(
+                    rec.transcriptReviewDisplayTitle,
+                    color: (rec.isTranscriptReviewed == true) ? MFTheme.mintGreen : MFTheme.warmAmber,
+                    icon: (rec.isTranscriptReviewed == true) ? "checkmark.seal.fill" : "waveform"
+                )
+                Button((rec.isTranscriptReviewed == true) ? "改为待校对" : "标记已校对") {
+                    store.setTranscriptReviewed(recordingId: rec.id, reviewed: !(rec.isTranscriptReviewed ?? false))
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(MFTheme.iceCyan)
+                .buttonStyle(.plain)
+
                 Spacer()
             }
             .font(.caption)
             .foregroundStyle(MFTheme.textSecondary)
+
+            if let provenance, provenance.isSummaryBasedOnOlderTranscript {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(MFTheme.warmAmber)
+                    Text(provenance.summaryAlignmentDisplayTitle)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(MFTheme.warmAmber)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(MFTheme.warmAmber.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            }
 
             HStack(spacing: 8) {
                 Text("整理模式")
@@ -266,6 +339,10 @@ public struct RecordingDetailView: View {
                     Button("不关联项目（留空）") {
                         updateProjectAssociation(for: rec, projectName: nil)
                     }
+                    Button("自定义项目 / [[双链]]…") {
+                        customProjectNameInput = note?.projectName ?? ""
+                        showingCustomProjectAlert = true
+                    }
                     Divider()
                     ForEach(store.preferences.knownProjectNames, id: \.self) { proj in
                         Button(proj) {
@@ -275,7 +352,11 @@ public struct RecordingDetailView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "folder.fill")
-                        Text(note?.projectName ?? "关联项目（可选）")
+                        if let proj = note?.projectName, !proj.isEmpty {
+                            Text("[[\(proj)]]")
+                        } else {
+                            Text("关联项目（可选）")
+                        }
                     }
                     .font(.caption)
                     .padding(.horizontal, 10)
@@ -296,11 +377,7 @@ public struct RecordingDetailView: View {
                         do {
                             let res = try store.saveNoteDirectlyToObsidian(for: rec.id)
                             if let obsURL = res.obsidianOpenURL {
-                                #if os(macOS)
-                                NSWorkspace.shared.open(obsURL)
-                                #elseif os(iOS)
-                                UIApplication.shared.open(obsURL)
-                                #endif
+                                openSystemURL(obsURL)
                             }
                         } catch {
                             store.lastBannerFeedback = error.localizedDescription
@@ -321,6 +398,28 @@ public struct RecordingDetailView: View {
                         .foregroundStyle(MFTheme.softViolet)
                     }
                     .buttonStyle(.plain)
+
+                    if isBound {
+                        Button {
+                            do {
+                                let obsURL = try store.openBoundObsidianNoteURL(for: rec.id)
+                                openSystemURL(obsURL)
+                            } catch {
+                                store.lastBannerFeedback = error.localizedDescription
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.forward.square")
+                                Text("打开对应笔记")
+                            }
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(Color.white.opacity(0.06), in: Capsule())
+                            .foregroundStyle(MFTheme.iceCyan)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
 
                 Spacer()
@@ -338,6 +437,14 @@ public struct RecordingDetailView: View {
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 14)
+    }
+
+    private func openSystemURL(_ url: URL) {
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #elseif os(iOS)
+        UIApplication.shared.open(url)
+        #endif
     }
 
     @ViewBuilder
@@ -624,171 +731,296 @@ public struct RecordingDetailView: View {
     private func noteContentCard(rec: Recording) -> some View {
         if let rev = currentRevision {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    HStack(spacing: 7) {
-                        Image(systemName: rev.mode == .quickNote ? "bolt.Horizontal.circle.fill" : "list.bullet.clipboard.fill")
-                            .foregroundStyle(MFTheme.iceCyan)
-                        Text(rev.mode == .quickNote ? "随手记正文" : "会议记结构化纪要")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                            .foregroundStyle(MFTheme.textPrimary)
-                    }
-                    Spacer()
-
-                    Button(isEditingNote ? "保存修改" : "编辑笔记") {
-                        if isEditingNote {
-                            var updatedContent = rev.content
-                            updatedContent.summaryOrShortNote = draftSummaryOrShortNote
-                            store.saveUserEditedNote(
-                                for: rec.id,
-                                newTitle: draftTitle.isEmpty ? rec.title : draftTitle,
-                                newContent: updatedContent,
-                                projectName: draftProjectName,
-                                userSupplement: draftUserSupplement
-                            )
-                            isEditingNote = false
-                        } else {
-                            draftTitle = rec.title
-                            draftSummaryOrShortNote = rev.content.summaryOrShortNote
-                            draftProjectName = note?.projectName ?? ""
-                            draftUserSupplement = note?.userSupplement ?? ""
-                            isEditingNote = true
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MFTheme.iceCyan)
-                    .buttonStyle(.plain)
-                }
+                noteCardHeaderBar(rec: rec, rev: rev)
 
                 if isEditingNote {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("标题", text: $draftTitle)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("关联项目名（支持自动转为 [[双链]]，可留空）", text: $draftProjectName)
-                            .textFieldStyle(.roundedBorder)
-                        Text("AI 摘要 / 正文")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(MFTheme.textSecondary)
-                        TextEditor(text: $draftSummaryOrShortNote)
-                            .frame(minHeight: 90)
-                            .padding(6)
-                            .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
-                        Text("个人补充（导出与重新整理时始终受保护保留）")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(MFTheme.textSecondary)
-                        TextEditor(text: $draftUserSupplement)
-                            .frame(minHeight: 70)
-                            .padding(6)
-                            .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
-                    }
+                    noteEditorFields
                 } else {
-                    if rev.mode == .quickNote {
-                        Text(rev.content.summaryOrShortNote)
-                            .font(.body)
-                            .foregroundStyle(MFTheme.textPrimary)
-                    } else {
-                        if !rev.content.summaryOrShortNote.isEmpty {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("核心总结")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(MFTheme.iceCyan)
-                                Text(rev.content.summaryOrShortNote)
-                                    .font(.body)
-                                    .foregroundStyle(MFTheme.textPrimary)
-                            }
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(MFTheme.iceBlue.opacity(0.08))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .strokeBorder(MFTheme.iceBlue.opacity(0.22), lineWidth: 0.8)
-                                    )
-                            )
-                        }
-
-                        if !rev.content.backgroundPoints.isEmpty {
-                            bulletSection(title: "必要背景", items: rev.content.backgroundPoints)
-                        }
-                        if !rev.content.keyPoints.isEmpty {
-                            bulletSection(title: "关键观点", items: rev.content.keyPoints)
-                        }
-                        if !rev.content.decisions.isEmpty {
-                            bulletSection(title: "已确认结论", items: rev.content.decisions)
-                        }
-                    }
-
-                    if !rev.content.knowledgeReferences.isEmpty {
-                        DisclosureGroup("提供给 AI 的知识库背景（\(rev.content.knowledgeReferences.count) 篇）") {
-                            Text("历史背景不代表本次录音的新承诺。以下为发送时的片段快照。")
-                                .font(.caption).foregroundStyle(.secondary)
-                            ForEach(Array(rev.content.knowledgeReferences.enumerated()), id: \.offset) { _, reference in
-                                Text(reference.path).font(.caption.bold())
-                                Text(reference.excerpt).font(.caption).textSelection(.enabled)
-                            }
-                        }
-                    }
-                    let chapters = rev.content.chapters.isEmpty
-                        ? ASRAndLLMService.shared.buildChaptersFromSegments(segments)
-                        : rev.content.chapters
-                    if !chapters.isEmpty {
-                        Divider().overlay(Color.white.opacity(0.08))
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "bookmark.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(MFTheme.iceCyan)
-                                Text("录音章节（点击任意章节跳转回听）")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(MFTheme.textSecondary)
-                            }
-
-                            ForEach(Array(chapters.enumerated()), id: \.element.id) { idx, chapter in
-                                Button {
-                                    audioService.play(recording: rec, startMs: chapter.startMs, endMs: chapter.endMs)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        HStack(spacing: 8) {
-                                            Text(String(format: "%02d", idx + 1))
-                                                .font(.caption2.monospacedDigit().weight(.bold))
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(MFTheme.iceBlue.opacity(0.2), in: RoundedRectangle(cornerRadius: 5))
-                                                .foregroundStyle(MFTheme.iceCyan)
-
-                                            Text(chapter.title)
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(MFTheme.textPrimary)
-
-                                            Spacer()
-
-                                            Label(chapter.formattedTimeRange, systemImage: "play.circle.fill")
-                                                .font(.caption2.monospacedDigit())
-                                                .foregroundStyle(MFTheme.iceCyan)
-                                        }
-
-                                        Text(chapter.summary)
-                                            .font(.caption)
-                                            .foregroundStyle(MFTheme.textSecondary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .padding(11)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .fill(MFTheme.recessedBg.opacity(0.75))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.8)
-                                            )
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
+                    noteReadOnlyBody(rec: rec, rev: rev)
                 }
             }
             .mfGlassCard(cornerRadius: 16, padding: 16)
+        }
+    }
+
+    private func noteCardHeaderBar(rec: Recording, rev: NoteRevision) -> some View {
+        HStack {
+            HStack(spacing: 7) {
+                Image(systemName: rev.mode == .quickNote ? "bolt.Horizontal.circle.fill" : "list.bullet.clipboard.fill")
+                    .foregroundStyle(MFTheme.iceCyan)
+                Text(rev.mode == .quickNote ? "随手记正文" : "会议记结构化纪要")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(MFTheme.textPrimary)
+            }
+            Spacer()
+
+            Button(isEditingNote ? "保存修改" : "编辑笔记") {
+                if isEditingNote {
+                    var updatedContent = rev.content
+                    updatedContent.summaryOrShortNote = draftSummaryOrShortNote
+                    store.saveUserEditedNote(
+                        for: rec.id,
+                        newTitle: draftTitle.isEmpty ? rec.title : draftTitle,
+                        newContent: updatedContent,
+                        projectName: draftProjectName,
+                        userSupplement: draftUserSupplement
+                    )
+                    isEditingNote = false
+                } else {
+                    draftTitle = rec.title
+                    draftSummaryOrShortNote = rev.content.summaryOrShortNote
+                    draftProjectName = note?.projectName ?? ""
+                    draftUserSupplement = note?.userSupplement ?? ""
+                    isEditingNote = true
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(MFTheme.iceCyan)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var noteEditorFields: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("标题", text: $draftTitle)
+                .textFieldStyle(.roundedBorder)
+            TextField("关联项目名（支持自动转为 [[双链]]，可留空）", text: $draftProjectName)
+                .textFieldStyle(.roundedBorder)
+            Text("AI 摘要 / 正文")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(MFTheme.textSecondary)
+            TextEditor(text: $draftSummaryOrShortNote)
+                .frame(minHeight: 90)
+                .padding(6)
+                .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+            Text("个人补充（导出与重新整理时始终受保护保留）")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(MFTheme.textSecondary)
+            TextEditor(text: $draftUserSupplement)
+                .frame(minHeight: 70)
+                .padding(6)
+                .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    @ViewBuilder
+    private func noteReadOnlyBody(rec: Recording, rev: NoteRevision) -> some View {
+        noteCoreSummaryAndPoints(rev: rev)
+        noteSeparatedContextAndSupplement(rev: rev)
+        noteKnowledgeReferencesDisclosure(rev: rev)
+        noteChaptersList(rec: rec, rev: rev)
+    }
+
+    @ViewBuilder
+    private func noteCoreSummaryAndPoints(rev: NoteRevision) -> some View {
+        if rev.mode == .quickNote {
+            Text(rev.content.summaryOrShortNote)
+                .font(.body)
+                .foregroundStyle(MFTheme.textPrimary)
+        } else {
+            if !rev.content.summaryOrShortNote.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("核心总结")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                    Text(rev.content.summaryOrShortNote)
+                        .font(.body)
+                        .foregroundStyle(MFTheme.textPrimary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(MFTheme.iceBlue.opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(MFTheme.iceBlue.opacity(0.22), lineWidth: 0.8)
+                        )
+                )
+            }
+
+            if !rev.content.backgroundPoints.isEmpty {
+                bulletSection(title: "必要背景", items: rev.content.backgroundPoints)
+            }
+            if !rev.content.keyPoints.isEmpty {
+                bulletSection(title: "关键观点", items: rev.content.keyPoints)
+            }
+            if !rev.content.decisions.isEmpty {
+                bulletSection(title: "已确认结论", items: rev.content.decisions)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func noteSeparatedContextAndSupplement(rev: NoteRevision) -> some View {
+        if !rev.content.historicalContextNotes.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Label("历史笔记关联背景（非本次录音新承诺）", systemImage: "books.vertical")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MFTheme.softViolet)
+                ForEach(rev.content.historicalContextNotes, id: \.self) { item in
+                    Text("• \(item)")
+                        .font(.caption)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MFTheme.softViolet.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+
+        if !rev.content.aiInferences.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Label("AI 延伸推测与建议（非录音原话事实）", systemImage: "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MFTheme.warmAmber)
+                ForEach(rev.content.aiInferences, id: \.self) { item in
+                    Text("• \(item)")
+                        .font(.caption)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MFTheme.warmAmber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+
+        if let supplement = note?.userSupplement, !supplement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Label("个人手写补充（重整理与重导出受保护保留）", systemImage: "pencil.and.outline")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MFTheme.mintGreen)
+                Text(supplement)
+                    .font(.subheadline)
+                    .foregroundStyle(MFTheme.textPrimary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MFTheme.mintGreen.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    @ViewBuilder
+    private func noteKnowledgeReferencesDisclosure(rev: NoteRevision) -> some View {
+        if !rev.content.knowledgeReferences.isEmpty {
+            DisclosureGroup("提供给 AI 的知识库背景来源（\(rev.content.knowledgeReferences.count) 篇 · 可点击打开）") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("历史背景严格独立于本次录音事实，不会自动转为本次待办或日程。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(rev.content.knowledgeReferences.enumerated()), id: \.offset) { _, reference in
+                        knowledgeReferenceRow(reference)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func knowledgeReferenceRow(_ reference: KnowledgeReference) -> some View {
+        let refTitle = (reference.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(refTitle.isEmpty ? reference.path : refTitle)
+                    .font(.caption.bold())
+                    .foregroundStyle(MFTheme.textPrimary)
+                Spacer()
+                if let obsURL = store.obsidianOpenURL(forRelativePath: reference.path) {
+                    Button {
+                        openSystemURL(obsURL)
+                    } label: {
+                        Label("打开笔记", systemImage: "arrow.up.forward.square")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(MFTheme.softViolet)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if let refRecId = reference.recordingId,
+                   let deepURL = MemoFlowDeepLink.recordingURL(recordingId: refRecId, startMs: reference.timestampMs) {
+                    Button {
+                        _ = store.handleIncomingURL(deepURL)
+                    } label: {
+                        Label(
+                            reference.timestampMs.map { TimeFormatting.formatMilliseconds($0) } ?? "打开原录音",
+                            systemImage: "waveform"
+                        )
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text(reference.path)
+                .font(.caption2.monospaced())
+                .foregroundStyle(MFTheme.textMuted)
+            Text(reference.excerpt)
+                .font(.caption)
+                .foregroundStyle(MFTheme.textSecondary)
+                .textSelection(.enabled)
+        }
+        .padding(8)
+        .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func noteChaptersList(rec: Recording, rev: NoteRevision) -> some View {
+        let chapters = rev.content.chapters.isEmpty
+            ? ASRAndLLMService.shared.buildChaptersFromSegments(segments)
+            : rev.content.chapters
+        if !chapters.isEmpty {
+            Divider().overlay(Color.white.opacity(0.08))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bookmark.fill")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.iceCyan)
+                    Text("录音章节（点击任意章节跳转回听）")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+
+                ForEach(Array(chapters.enumerated()), id: \.element.id) { idx, chapter in
+                    Button {
+                        _ = audioService.play(recording: rec, startMs: chapter.startMs, endMs: chapter.endMs)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 8) {
+                                Text(String(format: "%02d", idx + 1))
+                                    .font(.caption2.monospacedDigit().weight(.bold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(MFTheme.iceBlue.opacity(0.2), in: RoundedRectangle(cornerRadius: 5))
+                                    .foregroundStyle(MFTheme.iceCyan)
+
+                                Text(chapter.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+
+                                Spacer()
+
+                                Label(chapter.formattedTimeRange, systemImage: "play.circle.fill")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(MFTheme.iceCyan)
+                            }
+
+                            Text(chapter.summary)
+                                .font(.caption)
+                                .foregroundStyle(MFTheme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(11)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(MFTheme.recessedBg.opacity(0.75))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.8)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -832,31 +1064,57 @@ public struct RecordingDetailView: View {
             }
             if !(rec.marks ?? []).isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("书签与批注").font(.headline)
+                    Text("书签与高亮批注（导出 Obsidian 时附带可点击来源时间戳）")
+                        .font(.subheadline.weight(.bold))
                     ForEach(rec.marks ?? []) { mark in
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: 8) {
                             Button {
-                                audioService.play(recording: rec, startMs: mark.startMs)
+                                _ = audioService.play(recording: rec, startMs: mark.startMs, endMs: mark.endMs)
                             } label: {
-                                Label(TimeFormatting.formatMilliseconds(mark.startMs), systemImage: "bookmark")
-                            }.buttonStyle(.plain)
-                            VStack(alignment: .leading) {
+                                Label(
+                                    TimeFormatting.formatMilliseconds(mark.startMs),
+                                    systemImage: mark.kind == "highlight" ? "highlighter" : "bookmark.fill"
+                                )
+                                .foregroundStyle(mark.kind == "highlight" ? MFTheme.warmAmber : MFTheme.iceCyan)
+                            }
+                            .buttonStyle(.plain)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mark.kind == "highlight" ? "高亮批注" : "录制书签")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(MFTheme.textMuted)
                                 if !mark.quote.isEmpty { Text(mark.quote).textSelection(.enabled) }
                                 if !mark.note.isEmpty { Text(mark.note).foregroundStyle(MFTheme.textSecondary) }
                             }
                             Spacer()
                             Button("删除", role: .destructive) { store.removeMark(recordingId: rec.id, markId: mark.id) }
                                 .buttonStyle(.plain)
-                        }.font(.caption)
+                        }
+                        .font(.caption)
                     }
-                }.padding(.vertical, 8)
+                }
+                .padding(.vertical, 8)
                 Divider()
             }
-            HStack {
+            HStack(spacing: 8) {
                 Text("点击段落时间戳即可跳到对应录音位置回听 · 点击说话人可重命名")
                     .font(.caption)
                     .foregroundStyle(MFTheme.textSecondary)
                 Spacer()
+                Button {
+                    showingAddBookmarkAlert = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bookmark.fill")
+                        Text("+ 加书签")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(MFTheme.iceCyan)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(MFTheme.iceBlue.opacity(0.14), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
                 Button {
                     let mode = note?.mode ?? store.preferences.defaultNoteMode
                     Task {
@@ -1492,5 +1750,76 @@ public struct MarkdownExportPreviewSheet: View {
             }
             .buttonStyle(.plain)
         }
+    }
+}
+
+private struct DetailAlertsViewModifier: ViewModifier {
+    @ObservedObject var store: MemoFlowStore
+    let recording: Recording
+    @Binding var editingSpeakerId: String?
+    @Binding var newSpeakerNameInput: String
+    @Binding var showingCustomProjectAlert: Bool
+    @Binding var customProjectNameInput: String
+    @Binding var showingAddBookmarkAlert: Bool
+    @Binding var newBookmarkNoteInput: String
+    let onUpdateProject: (String?) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("修改说话人名称", isPresented: Binding(
+                get: { editingSpeakerId != nil },
+                set: { if !$0 { editingSpeakerId = nil } }
+            )) {
+                TextField("输入真实姓名或自定义昵称", text: $newSpeakerNameInput)
+                Button("确认修改") {
+                    if let spkId = editingSpeakerId {
+                        store.updateSpeakerName(recordingId: recording.id, speakerId: spkId, newName: newSpeakerNameInput)
+                    }
+                    editingSpeakerId = nil
+                    newSpeakerNameInput = ""
+                }
+                Button("取消", role: .cancel) {
+                    editingSpeakerId = nil
+                    newSpeakerNameInput = ""
+                }
+            } message: {
+                Text("已有说话人标识时更新同组昵称；未识别说话人时只标记当前段落。")
+            }
+            .alert("自定义关联项目 / Obsidian 双链", isPresented: $showingCustomProjectAlert) {
+                TextField("输入项目名或 [[项目笔记名]]", text: $customProjectNameInput)
+                Button("保存关联") {
+                    let cleaned = MarkdownExporterService.unwrapProjectWikiLink(customProjectNameInput) ?? ""
+                    onUpdateProject(cleaned.isEmpty ? nil : cleaned)
+                    if !cleaned.isEmpty, !store.preferences.knownProjectNames.contains(cleaned) {
+                        store.preferences.knownProjectNames.append(cleaned)
+                        store.saveToDisk()
+                    }
+                    customProjectNameInput = ""
+                }
+                Button("取消", role: .cancel) {
+                    customProjectNameInput = ""
+                }
+            } message: {
+                Text("导出到 Obsidian 时会自动写成 [[项目名]] 内部链接，支持随时纠正。")
+            }
+            .alert("在当前位置添加书签与批注", isPresented: $showingAddBookmarkAlert) {
+                TextField("输入批注或标记说明（可留空）", text: $newBookmarkNoteInput)
+                Button("添加书签") {
+                    let currentMs = (store.audioService.playingRecordingId == recording.id) ? store.audioService.currentPlaybackTimeMs : 0
+                    store.addBookmarkMark(
+                        recordingId: recording.id,
+                        atMs: currentMs,
+                        note: newBookmarkNoteInput,
+                        kind: "bookmark"
+                    )
+                    newBookmarkNoteInput = ""
+                }
+                Button("取消", role: .cancel) {
+                    newBookmarkNoteInput = ""
+                }
+            } message: {
+                let currentMs = (store.audioService.playingRecordingId == recording.id) ? store.audioService.currentPlaybackTimeMs : 0
+                Text("将在 \(TimeFormatting.formatMilliseconds(currentMs)) 处记录书签，导出 Obsidian 时完整保留来源时间戳。")
+            }
     }
 }

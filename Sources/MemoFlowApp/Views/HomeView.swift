@@ -1,4 +1,10 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 #if canImport(MemoFlowCore)
 import MemoFlowCore
 #endif
@@ -13,6 +19,7 @@ public struct HomeView: View {
     @State private var showingRecorderSheet: Bool = false
     @State private var showingUnifiedReview: Bool = false
     @State private var showingSettings: Bool = false
+    @State private var showingGroundedQA: Bool = false
     @State private var recordingPendingDeletion: Recording?
 
     public init(store: MemoFlowStore) {
@@ -149,6 +156,36 @@ public struct HomeView: View {
                 .frame(minWidth: 520, idealWidth: 560, minHeight: 680, idealHeight: 740)
                 #endif
             }
+            .sheet(isPresented: $showingGroundedQA) {
+                NavigationStack {
+                    VaultGroundedQASheetView(store: store)
+                }
+                #if os(macOS)
+                .frame(minWidth: 520, idealWidth: 560, minHeight: 620, idealHeight: 680)
+                #endif
+            }
+            .navigationDestination(item: $store.activeDeepLinkRequest) { req in
+                RecordingDetailView(
+                    store: store,
+                    recordingId: req.recordingId,
+                    initialJumpMs: req.targetStartMs,
+                    initialEndMs: req.targetEndMs
+                )
+            }
+            .alert(
+                "录音定位提示",
+                isPresented: Binding(
+                    get: { store.activeDeepLinkAlert != nil },
+                    set: { if !$0 { store.activeDeepLinkAlert = nil } }
+                ),
+                presenting: store.activeDeepLinkAlert
+            ) { _ in
+                Button("知道了", role: .cancel) {
+                    store.activeDeepLinkAlert = nil
+                }
+            } message: { msg in
+                Text(msg)
+            }
             .sheet(
                 isPresented: Binding(
                     get: { store.pendingConsentRecordingId != nil },
@@ -208,6 +245,30 @@ public struct HomeView: View {
             }
 
             Spacer()
+
+            Button {
+                showingGroundedQA = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "books.vertical.circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(MFTheme.softViolet)
+                    Text("跨笔记问答")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(MFTheme.textPrimary)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule()
+                        .fill(MFTheme.cardSurfaceGradient)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                        )
+                )
+            }
+            .buttonStyle(.plain)
 
             Button {
                 showingSettings = true
@@ -965,5 +1026,176 @@ private struct RecordingRowCard: View {
             }
         }()
         MFBadgePill(status.displayTitle, color: color)
+    }
+}
+
+// MARK: - P1-5 Cross-Note Grounded Retrieval & Q&A Sheet
+
+public struct VaultGroundedQASheetView: View {
+    @ObservedObject var store: MemoFlowStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var questionInput: String = ""
+    @State private var isQuerying: Bool = false
+    @State private var qaResult: GroundedQAResult?
+
+    public init(store: MemoFlowStore) {
+        self.store = store
+    }
+
+    public var body: some View {
+        ZStack {
+            MFTheme.sheetBg.ignoresSafeArea()
+            MFTheme.ambientTopGlow.ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("跨笔记与录音有据问答")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(MFTheme.textPrimary)
+                        Text("回答严格引用已授权文件夹内的笔记与录音时间戳，不把历史事项当作新承诺")
+                            .font(.caption2)
+                            .foregroundStyle(MFTheme.textSecondary)
+                    }
+                    Spacer()
+                    Button("关闭") { dismiss() }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                }
+
+                HStack(spacing: 8) {
+                    TextField("输入项目、术语或历史讨论问题（如：科研栏目首期方向）", text: $questionInput)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            runQuery()
+                        }
+
+                    MFLuminousActionButton(isQuerying ? "检索中…" : "检索并回答", icon: "magnifyingglass") {
+                        runQuery()
+                    }
+                    .disabled(isQuerying)
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let res = qaResult {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("检索能力边界说明", systemImage: "info.circle.fill")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(MFTheme.iceCyan)
+                                Text(res.capabilityDisclosure)
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.textSecondary)
+                            }
+                            .mfGlassCard(cornerRadius: 12, padding: 12, tint: MFTheme.iceBlue)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("检索回答")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                Text(res.answer)
+                                    .font(.callout)
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                    .textSelection(.enabled)
+                            }
+                            .mfGlassCard(cornerRadius: 12, padding: 14)
+
+                            if !res.citations.isEmpty {
+                                Text("可核验来源引用（点击打开笔记或跳转录音时间戳）")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(MFTheme.textSecondary)
+
+                                ForEach(res.citations) { cite in
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack {
+                                            Text(cite.noteTitle)
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(MFTheme.textPrimary)
+                                            if let rel = cite.noteRelativePath {
+                                                Text(rel)
+                                                    .font(.caption2.monospaced())
+                                                    .foregroundStyle(MFTheme.textSecondary)
+                                            }
+                                            Spacer()
+                                        }
+
+                                        Text(cite.excerpt)
+                                            .font(.caption)
+                                            .foregroundStyle(MFTheme.textSecondary)
+                                            .lineLimit(3)
+
+                                        HStack(spacing: 10) {
+                                            if let rel = cite.noteRelativePath,
+                                               let obsURL = store.obsidianOpenURL(forRelativePath: rel) {
+                                                Button {
+                                                    #if os(macOS)
+                                                    NSWorkspace.shared.open(obsURL)
+                                                    #elseif os(iOS)
+                                                    UIApplication.shared.open(obsURL)
+                                                    #endif
+                                                } label: {
+                                                    Label("在 Obsidian 打开笔记", systemImage: "books.vertical.fill")
+                                                        .font(.caption2.weight(.semibold))
+                                                        .padding(.horizontal, 10)
+                                                        .padding(.vertical, 5)
+                                                        .background(MFTheme.softViolet.opacity(0.18), in: Capsule())
+                                                        .foregroundStyle(MFTheme.softViolet)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+
+                                            if let recId = cite.recordingId {
+                                                let estPrefix = cite.isEstimated ? "约 " : ""
+                                                let timeStr = cite.startMs.map { "\(estPrefix)\(TimeFormatting.formatMilliseconds($0))" } ?? "开头"
+                                                Button {
+                                                    if let deepURL = MemoFlowDeepLink.recordingURL(
+                                                        recordingId: recId,
+                                                        startMs: cite.startMs,
+                                                        endMs: cite.endMs,
+                                                        isEstimated: cite.isEstimated
+                                                    ) {
+                                                        dismiss()
+                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                                            _ = store.handleIncomingURL(deepURL)
+                                                        }
+                                                    }
+                                                } label: {
+                                                    Label("定位录音 (\(timeStr))", systemImage: "headphones")
+                                                        .font(.caption2.weight(.semibold))
+                                                        .padding(.horizontal, 10)
+                                                        .padding(.vertical, 5)
+                                                        .background(MFTheme.iceBlue.opacity(0.18), in: Capsule())
+                                                        .foregroundStyle(MFTheme.iceCyan)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                    }
+                                    .mfGlassCard(cornerRadius: 12, padding: 12)
+                                }
+                            }
+                        } else {
+                            Text("输入关键词进行跨笔记与历史录音检索。当前检索范围遵循「设置 -> Obsidian 笔记库联动」中勾选的允许文件夹与排除目录。")
+                                .font(.caption)
+                                .foregroundStyle(MFTheme.textSecondary)
+                                .padding(.top, 12)
+                        }
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
+    }
+
+    private func runQuery() {
+        let q = questionInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        isQuerying = true
+        Task {
+            let res = await store.askGroundedQuestion(q)
+            qaResult = res
+            isQuerying = false
+        }
     }
 }

@@ -34,5 +34,18 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.esine.MemoFlow.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>memoflow</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

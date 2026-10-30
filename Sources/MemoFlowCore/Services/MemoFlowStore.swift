@@ -24,6 +24,7 @@ public final class MemoFlowStore: ObservableObject {
     @Published public var operationLogs: [ActionOperationLog] = []
     @Published public var markdownExportsByRecording: [UUID: [MarkdownExport]] = [:]
     @Published public var obsidianBindingsByRecording: [UUID: ObsidianNoteBinding] = [:]
+    @Published public var personalMemories: [PersonalMemoryItem] = []
     @Published public var processingConsent: ProcessingConsent = ProcessingConsent()
     @Published public var processingJobsByRecording: [UUID: ProcessingJob] = [:]
     @Published public var preferences: MemoFlowPreferences = MemoFlowPreferences()
@@ -33,6 +34,9 @@ public final class MemoFlowStore: ObservableObject {
     @Published public var pendingConsentMode: NoteMode = .quickNote
     private var pendingConsentRetranscribe = false
     @Published public var lastBannerFeedback: String?
+    @Published public var activeDeepLinkRequest: DeepLinkNavigationRequest?
+    @Published public var activeDeepLinkAlert: String?
+    @Published public var availableVaultTopFolders: [String] = []
     @Published public var knowledgeStatus: String = "选择知识库并开启背景辅助后，将在本机建立索引。"
     @Published public var isRefreshingKnowledge = false
     private let knowledgeService = ObsidianKnowledgeService()
@@ -48,6 +52,7 @@ public final class MemoFlowStore: ObservableObject {
             let bookmark = try VaultAccess.bookmark(for: url)
             preferences.obsidianVaultBookmark = bookmark
             preferences.obsidianVaultRootPath = url.path
+            availableVaultTopFolders = (try? ObsidianKnowledgeService.listTopLevelFolders(preferences: preferences)) ?? []
             saveToDisk()
             knowledgeStatus = "知识库已连接。开启背景辅助后刷新。"
             Task { await refreshKnowledge() }
@@ -56,15 +61,20 @@ public final class MemoFlowStore: ObservableObject {
 
     public func disconnectObsidianVault() {
         preferences.knowledgeContextEnabled = false
+        preferences.allowSendingKnowledgeToCloudLLM = false
         preferences.obsidianVaultBookmark = nil
         preferences.obsidianVaultRootPath = nil
         preferences.autoExportToObsidianOnComplete = false
+        availableVaultTopFolders = []
         saveToDisk()
-        knowledgeStatus = "已断开连接；历史笔记中的参考记录仍保留。"
+        knowledgeStatus = "已断开连接并撤销知识库读取与云端发送授权；历史笔记中的参考记录仍保留。"
         Task { await knowledgeService.clear() }
     }
 
     public func refreshKnowledge() async {
+        if preferences.obsidianVaultBookmark != nil {
+            availableVaultTopFolders = (try? ObsidianKnowledgeService.listTopLevelFolders(preferences: preferences)) ?? []
+        }
         guard !isRefreshingKnowledge else { return }
         _ = await knowledgeContext(query: "")
     }
@@ -465,6 +475,7 @@ public final class MemoFlowStore: ObservableObject {
                 }
                 recordings[currentIndex].transcriptSource = TranscriptSource(fileName: recording.localAudioFileName,
                     sha256: fingerprint, audioDuration: duration, engine: engine, completedAt: Date())
+                recordings[currentIndex].isTranscriptReviewed = false
                 saveToDisk()
                 if pipelinePreferences.asrEngineMode == .localWhisper {
                     let message = "本机 Whisper 已生成机器逐字稿，需回听校对；现有 AI 笔记仍基于旧稿。"
@@ -484,10 +495,27 @@ public final class MemoFlowStore: ObservableObject {
             updateRecordingStatus(recordingId, status: .organizing, failureReason: nil)
             let revisionId = UUID()
             let llmKey = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
+            let isUsingCloudLLM = !(llmKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let knowledgePreferences = preferences
-            let references = (llmKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? [] : await knowledgeContext(query: segments.map(\.text).joined(separator: "\n"))
-            let permittedReferences = knowledgePreferences == preferences && preferences.knowledgeContextEnabled ? references : []
+            let localReferences = preferences.knowledgeContextEnabled
+                ? await knowledgeContext(query: segments.map(\.text).joined(separator: "\n"))
+                : []
+            let canUseKnowledgeForCurrentOrganizer: Bool = {
+                guard knowledgePreferences == preferences, preferences.knowledgeContextEnabled else { return false }
+                if isUsingCloudLLM {
+                    // P1-5：严格分离「本机读取知识库」与「发送片段/个人记忆至云端 LLM」的独立授权
+                    return preferences.allowSendingKnowledgeToCloudLLM
+                }
+                return true
+            }()
+            let permittedReferences = canUseKnowledgeForCurrentOrganizer ? localReferences : []
+            let permittedMemories: [PersonalMemoryItem] = {
+                let confirmed = personalMemories.filter { $0.status == .confirmed }
+                if isUsingCloudLLM {
+                    return preferences.allowSendingKnowledgeToCloudLLM ? confirmed : []
+                }
+                return confirmed
+            }()
             guard pipelinePreferences == preferences, consentAtStart == processingConsent else {
                 throw ProcessingPipelineError.audioProcessingFailed("服务配置或授权已变化，未发送逐字稿")
             }
@@ -498,7 +526,8 @@ public final class MemoFlowStore: ObservableObject {
                 revisionId: revisionId,
                 preferences: pipelinePreferences,
                 llmAPIKey: llmKey,
-                knowledgeReferences: permittedReferences
+                knowledgeReferences: permittedReferences,
+                confirmedMemories: permittedMemories
             )
 
             guard pipelinePreferences == preferences, consentAtStart == processingConsent,
@@ -577,6 +606,8 @@ public final class MemoFlowStore: ObservableObject {
         let existingNote = notesByRecording[recordingId]
         let noteId = existingNote?.id ?? UUID()
         let prevRevId = existingNote?.currentRevisionId
+        let currentSegments = segmentsByRecording[recordingId] ?? []
+        let currentRec = recordings.first(where: { $0.id == recordingId })
 
         let newRevision = NoteRevision(
             id: revisionId,
@@ -585,7 +616,9 @@ public final class MemoFlowStore: ObservableObject {
             generatedAt: Date(),
             content: output.noteContent,
             origin: .ai,
-            previousRevisionId: prevRevId
+            previousRevisionId: prevRevId,
+            sourceTranscriptDigest: NoteVersionProvenance.transcriptDigest(for: currentSegments),
+            basedOnTranscriptReviewed: currentRec?.isTranscriptReviewed == true
         )
 
         var revisions = revisionsByNote[noteId] ?? []
@@ -673,13 +706,18 @@ public final class MemoFlowStore: ObservableObject {
         if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updatedStructured.suggestedTitle = newTitle
         }
+        let prevRev = currentRevision(for: recordingId)
+        let currentSegments = segmentsByRecording[recordingId] ?? []
+        let currentRec = recordings.first(where: { $0.id == recordingId })
         let newRev = NoteRevision(
             noteId: note.id,
             mode: note.mode,
             generatedAt: Date(),
             content: updatedStructured,
             origin: .userEdited,
-            previousRevisionId: note.currentRevisionId
+            previousRevisionId: note.currentRevisionId,
+            sourceTranscriptDigest: prevRev?.sourceTranscriptDigest ?? NoteVersionProvenance.transcriptDigest(for: currentSegments),
+            basedOnTranscriptReviewed: currentRec?.isTranscriptReviewed == true
         )
         var revs = revisionsByNote[note.id] ?? []
         revs.append(newRev)
@@ -1070,6 +1108,318 @@ public final class MemoFlowStore: ObservableObject {
         saveToDisk()
     }
 
+    /// P1-4：在录音完成后随时添加带来源时间戳的书签或批注
+    public func addBookmarkMark(
+        recordingId: UUID,
+        atMs: Int,
+        endMs: Int? = nil,
+        quote: String = "",
+        note: String = "",
+        kind: String = "bookmark"
+    ) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        let safeMs = max(0, atMs)
+        var marks = recordings[index].marks ?? []
+        marks.append(RecordingMark(startMs: safeMs, endMs: endMs, quote: quote, note: note, kind: kind))
+        marks.sort { $0.startMs < $1.startMs }
+        recordings[index].marks = marks
+        saveToDisk()
+    }
+
+    /// P1-4：切换逐字稿人工审核状态（区分已人工校对 vs 机器初稿）
+    public func setTranscriptReviewed(recordingId: UUID, reviewed: Bool) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        recordings[index].isTranscriptReviewed = reviewed
+        if reviewed, recordings[index].processingStatus == .transcriptNeedsReview {
+            recordings[index].processingStatus = .completed
+            recordings[index].failureReason = nil
+        }
+        saveToDisk()
+    }
+
+    // MARK: - P1-3 Bidirectional Navigation (Obsidian <-> MemoFlow Deep Links)
+
+    /// 生成指向知识库内任意笔记相对路径的 `obsidian://open` 链接（用于打开历史引用笔记）
+    public func obsidianOpenURL(forRelativePath relativePath: String) -> URL? {
+        if let root = try? ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences) {
+            return MarkdownExporterService.obsidianOpenURL(vaultRootURL: root, relativePath: relativePath)
+        }
+        if let rawPath = preferences.obsidianVaultRootPath, !rawPath.isEmpty {
+            return MarkdownExporterService.obsidianOpenURL(vaultRootURL: URL(fileURLWithPath: rawPath), relativePath: relativePath)
+        }
+        return nil
+    }
+
+    /// 打开某条录音绑定的固定 Obsidian 笔记；若笔记在 Obsidian 中被重命名或移动，自动按 `recording_id` 重定位后再打开
+    public func openBoundObsidianNoteURL(for recordingId: UUID) throws -> URL {
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let fm = FileManager.default
+        if let binding = obsidianBindingsByRecording[recordingId], !binding.vaultRelativePath.isEmpty {
+            let safeRel = try ObsidianNoteSyncService.validateSafeRelativePath(binding.vaultRelativePath)
+            let directURL = root.appendingPathComponent(safeRel)
+            try obsidianSyncService.verifyCloudDownloaded(fileURL: directURL, relativePath: safeRel)
+            if fm.fileExists(atPath: directURL.path),
+               let text = try? ObsidianNoteSyncService.readCoordinatedUTF8(at: directURL),
+               ObsidianNoteSyncService.extractRecordingId(from: text) == recordingId,
+               let openURL = MarkdownExporterService.obsidianOpenURL(vaultRootURL: root, relativePath: safeRel) {
+                return openURL
+            }
+        }
+
+        if let relocated = try obsidianSyncService.findNoteByRecordingId(
+            recordingId: recordingId,
+            vaultRootURL: root,
+            preferredSubfolder: preferences.obsidianTargetSubfolder
+        ) {
+            var updated = obsidianBindingsByRecording[recordingId] ?? ObsidianNoteBinding(
+                recordingId: recordingId,
+                vaultRelativePath: relocated.relativePath,
+                lastKnownFileName: relocated.fileURL.lastPathComponent
+            )
+            updated.vaultRelativePath = relocated.relativePath
+            updated.lastKnownFileName = relocated.fileURL.lastPathComponent
+            updated.status = .synced
+            obsidianBindingsByRecording[recordingId] = updated
+            saveToDisk()
+
+            if let openURL = MarkdownExporterService.obsidianOpenURL(vaultRootURL: root, relativePath: relocated.relativePath) {
+                return openURL
+            }
+        }
+
+        if var existing = obsidianBindingsByRecording[recordingId] {
+            existing.status = .missingInVault
+            existing.lastErrorMessage = "未在 Obsidian 库中找到该录音对应的笔记文件（原音频仍安全保留）。"
+            obsidianBindingsByRecording[recordingId] = existing
+            saveToDisk()
+        }
+        throw ObsidianSyncError.fileOperationFailed("未在 Obsidian 库中找到该录音对应的笔记，请先点击导出创建或重新写入。")
+    }
+
+    /// 处理从 Obsidian 点击 `memoflow://recording/<UUID>?startMs=...` 打开应用或前台跳转（覆盖缺失录音、时间越界夹逼与冷启动导航）
+    @discardableResult
+    public func handleIncomingURL(_ url: URL) -> DeepLinkOutcome {
+        guard let link = MemoFlowDeepLink.parse(url) else {
+            let msg = "无法解析 MemoFlow 链接：\(url.absoluteString)"
+            activeDeepLinkAlert = msg
+            lastBannerFeedback = msg
+            return .invalidURL(url.absoluteString)
+        }
+
+        guard let recording = recordings.first(where: { $0.id == link.recordingId }) else {
+            let msg = "未在当前设备找到对应的录音记录（ID: \(link.recordingId.uuidString)）。可能尚未同步或已被删除。"
+            activeDeepLinkAlert = msg
+            lastBannerFeedback = msg
+            return .recordingNotFound(recordingId: link.recordingId)
+        }
+
+        let totalMs = max(0, Int((recording.duration * 1000).rounded()))
+        var targetStartMs = link.startMs
+        var wasClamped = false
+
+        if let requested = link.startMs {
+            if requested < 0 {
+                targetStartMs = 0
+                wasClamped = true
+            } else if totalMs > 0 && requested > totalMs {
+                targetStartMs = max(0, totalMs - min(500, totalMs))
+                wasClamped = true
+            }
+        }
+
+        var targetEndMs = link.endMs
+        if let start = targetStartMs, let end = targetEndMs {
+            if end <= start {
+                targetEndMs = nil
+            } else if totalMs > 0 && end > totalMs {
+                targetEndMs = totalMs
+            }
+        }
+
+        activeDeepLinkRequest = DeepLinkNavigationRequest(
+            recordingId: recording.id,
+            targetStartMs: targetStartMs,
+            targetEndMs: targetEndMs,
+            isEstimated: link.isEstimated
+        )
+
+        let played = audioService.play(
+            recording: recording,
+            startMs: targetStartMs ?? 0,
+            endMs: targetEndMs
+        )
+
+        if !played {
+            let errMsg = audioService.lastPlaybackError ?? "当前设备尚未获取到该录音的音频文件。"
+            activeDeepLinkAlert = errMsg
+            lastBannerFeedback = errMsg
+            return .audioMissingOnDevice(recordingId: recording.id, targetMs: targetStartMs, message: errMsg)
+        }
+
+        if wasClamped, let req = link.startMs, let clamped = targetStartMs {
+            let msg = "链接时间（\(TimeFormatting.formatMilliseconds(max(0, req)))）超出录音长度，已定位到有效边界 \(TimeFormatting.formatMilliseconds(clamped))。"
+            lastBannerFeedback = msg
+            return .clampedOutOfBounds(recordingId: recording.id, requestedMs: req, clampedMs: clamped)
+        }
+
+        if let targetStartMs {
+            let estPrefix = link.isEstimated ? "约 " : ""
+            lastBannerFeedback = "已定位至录音 \(estPrefix)\(TimeFormatting.formatMilliseconds(targetStartMs)) 回听"
+        } else {
+            lastBannerFeedback = "已打开录音《\(recording.title)》"
+        }
+        return .opened(recordingId: recording.id, targetMs: targetStartMs, isEstimated: link.isEstimated)
+    }
+
+    // MARK: - P1-5 Personal Memory Review CRUD & Grounded Q&A
+
+    @discardableResult
+    public func extractCandidateMemories(for recordingId: UUID) -> [PersonalMemoryItem] {
+        guard let rec = recordings.first(where: { $0.id == recordingId }) else { return [] }
+        let note = notesByRecording[recordingId]
+        let segs = segmentsByRecording[recordingId] ?? []
+        let boundPath = obsidianBindingsByRecording[recordingId]?.vaultRelativePath
+        var added: [PersonalMemoryItem] = []
+
+        if let proj = note?.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !proj.isEmpty,
+           !personalMemories.contains(where: { $0.category == .project && $0.key == proj }) {
+            let item = PersonalMemoryItem(
+                category: .project,
+                key: proj,
+                value: "来自录音《\(rec.title)》关联的项目背景",
+                sourceRecordingId: recordingId,
+                sourceNotePath: boundPath,
+                status: .pendingReview
+            )
+            personalMemories.insert(item, at: 0)
+            added.append(item)
+        }
+
+        let speakers = Set(segs.compactMap(\.speakerName)).subtracting(["我", "说话人", "发言人"])
+        for spk in speakers where !spk.isEmpty {
+            if !personalMemories.contains(where: { $0.category == .person && $0.key == spk }) {
+                let item = PersonalMemoryItem(
+                    category: .person,
+                    key: spk,
+                    value: "在《\(rec.title)》中参与讨论的协作者",
+                    sourceRecordingId: recordingId,
+                    sourceNotePath: boundPath,
+                    status: .pendingReview
+                )
+                personalMemories.insert(item, at: 0)
+                added.append(item)
+            }
+        }
+
+        for tag in note?.manualTags ?? [] {
+            let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty, !personalMemories.contains(where: { $0.category == .term && $0.key == cleaned }) {
+                let item = PersonalMemoryItem(
+                    category: .term,
+                    key: cleaned,
+                    value: "录音标签术语（来自《\(rec.title)》）",
+                    sourceRecordingId: recordingId,
+                    sourceNotePath: boundPath,
+                    status: .pendingReview
+                )
+                personalMemories.insert(item, at: 0)
+                added.append(item)
+            }
+        }
+
+        if !added.isEmpty {
+            saveToDisk()
+            lastBannerFeedback = "已提取 \(added.count) 条个人记忆候选（待你在设置页审阅确认后才会生效）。"
+        } else {
+            lastBannerFeedback = "暂无新的待审阅个人记忆项。"
+        }
+        return added
+    }
+
+    @discardableResult
+    public func addPersonalMemory(
+        category: PersonalMemoryCategory,
+        key: String,
+        value: String,
+        sourceRecordingId: UUID? = nil,
+        sourceNotePath: String? = nil,
+        status: PersonalMemoryStatus = .pendingReview
+    ) -> PersonalMemoryItem? {
+        let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty else { return nil }
+        let item = PersonalMemoryItem(
+            category: category,
+            key: k,
+            value: v,
+            sourceRecordingId: sourceRecordingId,
+            sourceNotePath: sourceNotePath,
+            status: status
+        )
+        personalMemories.insert(item, at: 0)
+        saveToDisk()
+        return item
+    }
+
+    public func confirmPersonalMemory(_ id: UUID) {
+        guard let idx = personalMemories.firstIndex(where: { $0.id == id }) else { return }
+        personalMemories[idx].status = .confirmed
+        personalMemories[idx].updatedAt = Date()
+        if personalMemories[idx].category == .project,
+           !preferences.knownProjectNames.contains(personalMemories[idx].key) {
+            preferences.knownProjectNames.append(personalMemories[idx].key)
+        }
+        saveToDisk()
+    }
+
+    public func updatePersonalMemory(
+        id: UUID,
+        category: PersonalMemoryCategory? = nil,
+        key: String,
+        value: String,
+        status: PersonalMemoryStatus? = nil
+    ) {
+        guard let idx = personalMemories.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        if let category { personalMemories[idx].category = category }
+        personalMemories[idx].key = trimmedKey
+        personalMemories[idx].value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let status { personalMemories[idx].status = status }
+        personalMemories[idx].updatedAt = Date()
+        saveToDisk()
+    }
+
+    public func deletePersonalMemory(_ id: UUID) {
+        personalMemories.removeAll { $0.id == id }
+        saveToDisk()
+    }
+
+    public func askGroundedQuestion(_ question: String) async -> GroundedQAResult {
+        do {
+            return try await knowledgeService.answerGroundedQuestion(
+                question: question,
+                preferences: preferences,
+                recordings: recordings,
+                segmentsByRecording: segmentsByRecording,
+                notesByRecording: notesByRecording,
+                bindingsByRecording: obsidianBindingsByRecording
+            )
+        } catch {
+            return GroundedQAResult(
+                question: question,
+                answer: "跨笔记检索失败：\(error.localizedDescription)",
+                citations: [],
+                capabilityDisclosure: "当前使用本地关键词检索，请检查知识库目录授权状态。",
+                usedCloudLLM: false
+            )
+        }
+    }
+
     /// 删除录音及本地关联数据，但不默认删除已创建的外部日历事件或提醒事项（PRD 4.7 & A18）
     public func deleteRecording(_ recordingId: UUID) {
         if audioService.playingRecordingId == recordingId {
@@ -1201,6 +1551,7 @@ public final class MemoFlowStore: ObservableObject {
         var operationLogs: [ActionOperationLog]
         var markdownExportsByRecording: [UUID: [MarkdownExport]]
         var obsidianBindingsByRecording: [UUID: ObsidianNoteBinding]
+        var personalMemories: [PersonalMemoryItem]
         var processingConsent: ProcessingConsent
         var processingJobsByRecording: [UUID: ProcessingJob]
         var preferences: MemoFlowPreferences
@@ -1216,6 +1567,7 @@ public final class MemoFlowStore: ObservableObject {
             operationLogs: [ActionOperationLog],
             markdownExportsByRecording: [UUID: [MarkdownExport]],
             obsidianBindingsByRecording: [UUID: ObsidianNoteBinding] = [:],
+            personalMemories: [PersonalMemoryItem] = [],
             processingConsent: ProcessingConsent,
             processingJobsByRecording: [UUID: ProcessingJob],
             preferences: MemoFlowPreferences
@@ -1230,6 +1582,7 @@ public final class MemoFlowStore: ObservableObject {
             self.operationLogs = operationLogs
             self.markdownExportsByRecording = markdownExportsByRecording
             self.obsidianBindingsByRecording = obsidianBindingsByRecording
+            self.personalMemories = personalMemories
             self.processingConsent = processingConsent
             self.processingJobsByRecording = processingJobsByRecording
             self.preferences = preferences
@@ -1247,6 +1600,7 @@ public final class MemoFlowStore: ObservableObject {
             self.operationLogs = try c.decodeIfPresent([ActionOperationLog].self, forKey: .operationLogs) ?? []
             self.markdownExportsByRecording = try c.decodeIfPresent([UUID: [MarkdownExport]].self, forKey: .markdownExportsByRecording) ?? [:]
             self.obsidianBindingsByRecording = try c.decodeIfPresent([UUID: ObsidianNoteBinding].self, forKey: .obsidianBindingsByRecording) ?? [:]
+            self.personalMemories = try c.decodeIfPresent([PersonalMemoryItem].self, forKey: .personalMemories) ?? []
             self.processingConsent = try c.decodeIfPresent(ProcessingConsent.self, forKey: .processingConsent) ?? ProcessingConsent()
             self.processingJobsByRecording = try c.decodeIfPresent([UUID: ProcessingJob].self, forKey: .processingJobsByRecording) ?? [:]
             self.preferences = try c.decodeIfPresent(MemoFlowPreferences.self, forKey: .preferences) ?? MemoFlowPreferences()
@@ -1266,6 +1620,7 @@ public final class MemoFlowStore: ObservableObject {
             operationLogs: operationLogs,
             markdownExportsByRecording: markdownExportsByRecording,
             obsidianBindingsByRecording: obsidianBindingsByRecording,
+            personalMemories: personalMemories,
             processingConsent: processingConsent,
             processingJobsByRecording: processingJobsByRecording,
             preferences: preferences
@@ -1299,6 +1654,7 @@ public final class MemoFlowStore: ObservableObject {
             self.operationLogs = snap.operationLogs
             self.markdownExportsByRecording = snap.markdownExportsByRecording
             self.obsidianBindingsByRecording = snap.obsidianBindingsByRecording
+            self.personalMemories = snap.personalMemories
             self.processingConsent = snap.processingConsent
             self.processingJobsByRecording = snap.processingJobsByRecording
             self.preferences = snap.preferences
