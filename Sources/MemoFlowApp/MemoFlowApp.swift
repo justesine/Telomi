@@ -12,7 +12,8 @@ public struct MemoFlowApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {
-        if ProcessInfo.processInfo.arguments.contains("--preview-data") {
+        if ProcessInfo.processInfo.arguments.contains("--preview-data")
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MemoFlowPreview-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             _store = StateObject(wrappedValue: MemoFlowStore(customStorageURL: directory.appendingPathComponent("state.json")))
@@ -22,8 +23,10 @@ public struct MemoFlowApp: App {
         #if os(macOS)
         DispatchQueue.main.async {
             NSApplication.shared.setActivationPolicy(.regular)
-            if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-               let iconImage = NSImage(contentsOf: iconURL) {
+            if let iconImage = NSImage(named: "AppIcon") {
+                NSApplication.shared.applicationIconImage = iconImage
+            } else if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+                      let iconImage = NSImage(contentsOf: iconURL) {
                 NSApplication.shared.applicationIconImage = iconImage
             }
             NSApplication.shared.activate(ignoringOtherApps: true)

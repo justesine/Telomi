@@ -25,7 +25,10 @@ let package = Package(
         .executableTarget(
             name: "MemoFlowApp",
             dependencies: ["MemoFlowCore"],
-            path: "Sources/MemoFlowApp"
+            path: "Sources/MemoFlowApp",
+            resources: [
+                .process("Assets.xcassets")
+            ]
         ),
         .testTarget(
             name: "MemoFlowCoreTests",
