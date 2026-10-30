@@ -1,12 +1,5 @@
 import SwiftUI
-import EventKit
 import UniformTypeIdentifiers
-#if canImport(AppKit)
-import AppKit
-#endif
-#if canImport(UIKit)
-import UIKit
-#endif
 #if canImport(MemoFlowCore)
 import MemoFlowCore
 #endif
@@ -33,58 +26,69 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
 
     public var title: String {
         switch self {
-        case .appleLocal: return "Apple 端侧识别"
-        case .whisperLocal: return "本机 Whisper"
         case .siliconFlow: return "硅基流动"
-        case .groq: return "Groq 极速"
+        case .appleLocal: return "Apple 语音识别"
+        case .whisperLocal: return "Whisper 本地"
+        case .groq: return "Groq 极速转写"
         case .openAI: return "OpenAI"
-        case .custom: return "自定义接口"
+        case .custom: return "自定义 ASR"
         }
     }
 
     public var badge: String {
         switch self {
-        case .appleLocal: return "免 Key · 本地"
-        case .whisperLocal: return "长录音 · 待校对"
-        case .siliconFlow: return "中文首选 · 免费额度"
-        case .groq: return "超快 Whisper"
-        case .openAI: return "官方标准"
+        case .siliconFlow: return "推荐 · 免费 SenseVoice"
+        case .appleLocal: return "系统自带 · 免 Key"
+        case .whisperLocal: return "Mac 本机 · 离线"
+        case .groq: return "毫秒级 · 需 API Key"
+        case .openAI: return "Whisper-1 · 需 Key"
         case .custom: return "高级"
         }
     }
 
     public var iconName: String {
         switch self {
-        case .appleLocal: return "iphone.gen3"
-        case .whisperLocal: return "waveform.badge.mic"
-        case .siliconFlow: return "sparkles"
-        case .groq: return "bolt.fill"
-        case .openAI: return "waveform.circle.fill"
-        case .custom: return "slider.horizontal.3"
+        case .siliconFlow: return "bolt.shield.fill"
+        case .appleLocal: return "apple.logo"
+        case .whisperLocal: return "macmini.fill"
+        case .groq: return "bolt.horizontal.fill"
+        case .openAI: return "sparkles"
+        case .custom: return "slider.horizontal.2.square"
         }
     }
 
-    public var baseURL: String {
+    public var defaultBaseURL: String {
         switch self {
+        case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .appleLocal: return ""
         case .whisperLocal: return ""
-        case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .groq: return "https://api.groq.com/openai/v1"
         case .openAI: return "https://api.openai.com/v1"
         case .custom: return ""
         }
     }
 
+    public var defaultModelName: String {
+        switch self {
+        case .siliconFlow: return "FunAudioLLM/SenseVoiceSmall"
+        case .appleLocal: return "apple-speech"
+        case .whisperLocal: return "ggml-large-v3-turbo-q5_0.bin"
+        case .groq: return "whisper-large-v3-turbo"
+        case .openAI: return "gpt-4o-transcribe"
+        case .custom: return ""
+        }
+    }
+
     public var presetModels: [(id: String, label: String)] {
         switch self {
-        case .appleLocal:
-            return [("apple-speech", "系统内置 SFSpeechRecognizer（中文/多语种）")]
-        case .whisperLocal:
-            return [("ggml-large-v3-turbo-q5_0.bin", "Whisper Large v3 Turbo（本机模型，需回听校对）")]
         case .siliconFlow:
             return [
                 ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 中英混杂极快 · 官方稳定在架）")
             ]
+        case .appleLocal:
+            return [("apple-speech", "系统内置 SFSpeechRecognizer（中文/多语种）")]
+        case .whisperLocal:
+            return [("ggml-large-v3-turbo-q5_0.bin", "Whisper Large v3 Turbo（本机模型，需回听校对）")]
         case .groq:
             return [
                 ("whisper-large-v3-turbo", "Whisper Large v3 Turbo（极速带时间戳）"),
@@ -118,6 +122,7 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
 
     public var title: String {
         switch self {
+        case .siliconFlow: return "硅基流动"
         case .deepSeek: return "DeepSeek"
         case .qwen: return "通义千问 Qwen"
         case .doubao: return "豆包 · 火山方舟"
@@ -125,7 +130,6 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
         case .kimi: return "Kimi · 月之暗面"
         case .minimax: return "MiniMax"
         case .qianfan: return "百度千帆"
-        case .siliconFlow: return "硅基流动"
         case .openAI: return "OpenAI"
         case .localRules: return "本地规则引擎"
         case .custom: return "自定义接口"
@@ -134,10 +138,10 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
 
     public var badge: String {
         switch self {
+        case .siliconFlow: return "可与语音共用 Key · 推荐"
         case .deepSeek: return "V4.1 Flash / V4 Pro"
         case .qwen, .glm, .kimi, .minimax, .qianfan: return "文本整理 · 需 API Key"
         case .doubao: return "填写模型或接入点 ID"
-        case .siliconFlow: return "可与语音共用 Key"
         case .openAI: return "GPT-4.1 / o4 系列"
         case .localRules: return "免 Key · 离线"
         case .custom: return "高级"
@@ -146,58 +150,108 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
 
     public var iconName: String {
         switch self {
+        case .siliconFlow: return "bolt.shield.fill"
         case .deepSeek: return "brain.head.profile"
-        case .qwen, .doubao, .glm, .kimi, .minimax, .qianfan: return "text.bubble"
-        case .siliconFlow: return "cpu.fill"
-        case .openAI: return "sparkle.magnifyingglass"
-        case .localRules: return "internaldrive.fill"
-        case .custom: return "slider.horizontal.3"
+        case .qwen: return "cloud.sun.rain.fill"
+        case .doubao: return "waveform.circle.fill"
+        case .glm: return "atom"
+        case .kimi: return "moon.stars.fill"
+        case .minimax: return "circle.hexagongrid.fill"
+        case .qianfan: return "leaf.fill"
+        case .openAI: return "sparkles"
+        case .localRules: return "cpu"
+        case .custom: return "slider.horizontal.2.square"
         }
     }
 
-    public var baseURL: String {
+    public var defaultBaseURL: String {
         switch self {
+        case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .deepSeek: return "https://api.deepseek.com/v1"
         case .qwen: return "https://dashscope.aliyuncs.com/compatible-mode/v1"
         case .doubao: return "https://ark.cn-beijing.volces.com/api/v3"
         case .glm: return "https://open.bigmodel.cn/api/paas/v4"
         case .kimi: return "https://api.moonshot.cn/v1"
-        case .minimax: return "https://api.minimaxi.com/v1"
+        case .minimax: return "https://api.minimax.chat/v1"
         case .qianfan: return "https://qianfan.baidubce.com/v2"
-        case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .openAI: return "https://api.openai.com/v1"
         case .localRules: return ""
         case .custom: return ""
         }
     }
 
+    public var defaultModelName: String {
+        switch self {
+        case .siliconFlow: return "Qwen/Qwen2.5-7B-Instruct"
+        case .deepSeek: return "deepseek-chat"
+        case .qwen: return "qwen-turbo"
+        case .doubao: return "doubao-pro-32k"
+        case .glm: return "glm-4-flash"
+        case .kimi: return "moonshot-v1-8k"
+        case .minimax: return "abab6.5s-chat"
+        case .qianfan: return "ernie-speed-128k"
+        case .openAI: return "gpt-4.1-mini"
+        case .localRules: return "local-heuristic"
+        case .custom: return ""
+        }
+    }
+
     public var presetModels: [(id: String, label: String)] {
         switch self {
-        case .qwen: return [("qwen-plus", "qwen-plus")]
-        case .doubao, .glm, .kimi, .minimax, .qianfan: return []
-        case .deepSeek:
-            return [
-                ("deepseek-flash", "DeepSeek-V4.1 Flash（当前官方默认）"),
-                ("deepseek-v4-pro", "DeepSeek-V4 Pro（进阶推理）")
-            ]
         case .siliconFlow:
             return [
                 ("Qwen/Qwen2.5-7B-Instruct", "通义千问 Qwen2.5-7B-Instruct（推荐 · 极速 9 秒出结果 · 免费）"),
-                ("Qwen/Qwen2.5-32B-Instruct", "通义千问 Qwen2.5-32B-Instruct（高速均衡）"),
-                ("deepseek-ai/DeepSeek-V3", "DeepSeek-V3（官方通用旗舰，无长思考延迟）"),
-                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（含深度思考链，耗时较长）"),
-                ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（进阶推理，硅基流动）"),
-                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct（高智商旗舰）")
+                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（进阶推理，硅基流动）"),
+                ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（长文思考旗舰，硅基流动）"),
+                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct（高智商旗舰）"),
+                ("Qwen/Qwen2.5-32B-Instruct", "通义千问 Qwen2.5-32B-Instruct（高速均衡）")
+            ]
+        case .deepSeek:
+            return [
+                ("deepseek-chat", "DeepSeek-V3（极速强劲日常整理）"),
+                ("deepseek-reasoner", "DeepSeek-R1（深度思考与行动推导）")
+            ]
+        case .qwen:
+            return [
+                ("qwen-turbo", "通义千问 Turbo（极速高性价比）"),
+                ("qwen-plus", "通义千问 Plus（长篇会议与访谈推荐）"),
+                ("qwen-max", "通义千问 Max（百炼旗舰复杂规划）")
+            ]
+        case .doubao:
+            return [
+                ("doubao-pro-32k", "豆包 Pro 32k（字节火山旗舰）"),
+                ("doubao-lite-32k", "豆包 Lite 32k（轻量高速）")
+            ]
+        case .glm:
+            return [
+                ("glm-4-flash", "GLM-4 Flash（智谱极速免费版）"),
+                ("glm-4-air", "GLM-4 Air（高性价比）"),
+                ("glm-4-plus", "GLM-4 Plus（旗舰智力）")
+            ]
+        case .kimi:
+            return [
+                ("moonshot-v1-8k", "Moonshot v1 8k（月之暗面高准度）"),
+                ("moonshot-v1-32k", "Moonshot v1 32k（长文本深度理解）")
+            ]
+        case .minimax:
+            return [
+                ("abab6.5s-chat", "MiniMax abab 6.5s（全能高速模型）")
+            ]
+        case .qianfan:
+            return [
+                ("ernie-speed-128k", "文心 Ernie Speed 128k（超长上下文免费版）"),
+                ("ernie-4.0-8k-latest", "文心 Ernie 4.0 8k（百度旗舰）")
             ]
         case .openAI:
             return [
-                ("gpt-4.1-mini", "GPT-4.1 mini（最新一代快速结构化提取推荐）"),
-                ("gpt-4.1", "GPT-4.1（最新旗舰长上下文模型）"),
-                ("o4-mini", "o4-mini（高性价比推理模型）"),
-                ("gpt-4o", "GPT-4o（经典多模态旗舰）")
+                ("gpt-4.1-mini", "GPT-4.1 Mini（高智商极速）"),
+                ("gpt-4.1", "GPT-4.1（最新旗舰推理）"),
+                ("gpt-4o", "GPT-4o（经典多模态）")
             ]
         case .localRules:
-            return [("local-heuristic", "内置离线规则提取（免网络 / 免 Key）")]
+            return [
+                ("local-heuristic", "内置规则提取引擎（离线免 Key，适合隐私与断网）")
+            ]
         case .custom:
             return []
         }
@@ -208,12 +262,83 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - P06 美化版卡片式设置页（选择优先 + 支持 /v1/models 实时拉取新模型）
+// MARK: - Settings Destination Enum (3 Groups, 9 Pages)
+
+public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
+    case asr = "asr"
+    case llm = "llm"
+    case liveStreaming = "live_streaming"
+    case speaker = "speaker"
+    case obsidian = "obsidian"
+    case memory = "memory"
+    case calendar = "calendar"
+    case appearance = "appearance"
+    case privacy = "privacy"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .asr: return "语音转写"
+        case .llm: return "AI 笔记"
+        case .liveStreaming: return "边录边整理"
+        case .speaker: return "说话人与昵称"
+        case .obsidian: return "Obsidian"
+        case .memory: return "个人记忆"
+        case .calendar: return "日历与提醒事项"
+        case .appearance: return "外观"
+        case .privacy: return "隐私与数据"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .asr: return "waveform.badge.mic"
+        case .llm: return "sparkles"
+        case .liveStreaming: return "waveform.badge.magnifyingglass"
+        case .speaker: return "person.2.wave.2"
+        case .obsidian: return "book.pages"
+        case .memory: return "brain.head.profile"
+        case .calendar: return "calendar.badge.clock"
+        case .appearance: return "moon"
+        case .privacy: return "hand.raised.fill"
+        }
+    }
+
+    public var groupName: String {
+        switch self {
+        case .asr, .llm, .liveStreaming, .speaker:
+            return "录音与整理"
+        case .obsidian, .memory, .calendar:
+            return "知识与联动"
+        case .appearance, .privacy:
+            return "偏好与管理"
+        }
+    }
+
+    public var iconColor: Color {
+        switch self {
+        case .asr: return MFTheme.iceCyan
+        case .llm: return MFTheme.warmAmber
+        case .liveStreaming: return MFTheme.iceCyan
+        case .speaker: return MFTheme.softViolet
+        case .obsidian: return MFTheme.warmAmber
+        case .memory: return MFTheme.softViolet
+        case .calendar: return MFTheme.mintGreen
+        case .appearance: return MFTheme.iceCyan
+        case .privacy: return MFTheme.coralRed
+        }
+    }
+}
+
+// MARK: - Main Settings View (ChatGPT-Style Grouped Navigation)
 
 public struct SettingsView: View {
     @ObservedObject var store: MemoFlowStore
     @Environment(\.dismiss) private var dismiss
     @State private var choosingVault = false
+
+    @State private var selectedDestination: SettingsDestination = .asr
 
     @State private var selectedASRProvider: ASRProviderOption = .siliconFlow
     @State private var selectedLLMProvider: LLMProviderOption = .deepSeek
@@ -236,6 +361,12 @@ public struct SettingsView: View {
     @State private var newLLMModelIdInput: String = ""
     @State private var showingAddASRModelField: Bool = false
     @State private var showingAddLLMModelField: Bool = false
+
+    // 接口连通性测试状态
+    @State private var isTestingASR: Bool = false
+    @State private var asrTestResult: (success: Bool, message: String)? = nil
+    @State private var isTestingLLM: Bool = false
+    @State private var llmTestResult: (success: Bool, message: String)? = nil
 
     @State private var writableCalendars: [WritableContainerInfo] = []
     @State private var writableReminderLists: [WritableContainerInfo] = []
@@ -260,28 +391,11 @@ public struct SettingsView: View {
             MFTheme.sheetBg.ignoresSafeArea()
             MFTheme.ambientTopGlow.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topHeaderBar
-
-                Divider().overlay(Color.white.opacity(0.08))
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        appearanceThemeCard
-                        asrSelectionCard
-                        llmSelectionCard
-                        liveStreamingCard
-                        speakerAndVoiceProfileCard
-                        calendarSyncModeCard
-                        obsidianIntegrationCard
-                        personalMemoryManagementCard
-                        routingAndTimePreferencesCard
-                        privacyAndPermissionsCard
-                        storageAndResetCard
-                    }
-                    .padding(20)
-                }
-            }
+            #if os(macOS)
+            macTwoPaneLayout
+            #else
+            iosNavigationStack
+            #endif
         }
         .focusEffectDisabled()
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
@@ -302,19 +416,380 @@ public struct SettingsView: View {
             case .failure(let error): store.knowledgeStatus = "选择文件夹失败：\(error.localizedDescription)"
             }
         }
+        .alert("恢复预置演示数据？", isPresented: $showingResetConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("重置并清空当前记录", role: .destructive) {
+                store.seedPRDDefaultScenarios()
+                dismiss()
+            }
+        } message: {
+            Text("将删除当前所有录音记录与生成笔记，恢复为初始测试场景数据。此操作不可撤销。")
+        }
     }
 
-    // MARK: - Top Header
+    // MARK: - iOS Navigation Stack
 
-    private var topHeaderBar: some View {
+    #if os(iOS)
+    private var iosNavigationStack: some View {
+        NavigationStack {
+            iosHomeListView
+                .navigationDestination(for: SettingsDestination.self) { dest in
+                    destinationView(for: dest)
+                }
+        }
+    }
+    #endif
+
+    // MARK: - Mac Two-Pane Layout
+
+    #if os(macOS)
+    private var macTwoPaneLayout: some View {
+        HStack(spacing: 0) {
+            macSidebarView
+                .frame(width: 250)
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            destinationView(for: selectedDestination)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var macSidebarView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                MemoFlowWaveformBrandIcon(size: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("服务与设置")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text("MemoFlow 设置中心")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(MFTheme.recessedBg.opacity(0.6))
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    macSidebarGroup(title: "录音与整理", destinations: [.asr, .llm, .liveStreaming, .speaker])
+                    macSidebarGroup(title: "知识与联动", destinations: [.obsidian, .memory, .calendar])
+                    macSidebarGroup(title: "偏好与管理", destinations: [.appearance, .privacy])
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 12)
+            }
+        }
+        .background(MFTheme.recessedBg.opacity(0.35))
+    }
+
+    private func macSidebarGroup(title: String, destinations: [SettingsDestination]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(MFTheme.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+
+            ForEach(destinations) { dest in
+                let isSelected = selectedDestination == dest
+                Button {
+                    selectedDestination = dest
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: dest.iconName)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
+                            .frame(width: 18)
+
+                        Text(dest.title)
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                            .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
+
+                        Spacer()
+
+                        Text(statusSummary(for: dest))
+                            .font(.system(size: 10))
+                            .foregroundStyle(MFTheme.textMuted)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 80, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+    #endif
+
+    // MARK: - iOS Grouped Home List (ChatGPT Style)
+
+    private var iosHomeListView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header notice
+                HStack(spacing: 12) {
+                    MemoFlowWaveformBrandIcon(size: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("服务与设置")
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .foregroundStyle(MFTheme.textPrimary)
+                        Text("按功能模块独立管理 · 密钥安全保存在 Keychain")
+                            .font(.caption2)
+                            .foregroundStyle(MFTheme.textSecondary)
+                    }
+                    Spacer()
+                    if savedToastVisible {
+                        MFBadgePill("已保存", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+
+                // 1. 录音与整理
+                iosGroupCard(title: "录音与整理", destinations: [.asr, .llm, .liveStreaming, .speaker])
+
+                // 2. 知识与联动
+                iosGroupCard(title: "知识与联动", destinations: [.obsidian, .memory, .calendar])
+
+                // 3. 偏好与管理
+                iosGroupCard(title: "偏好与管理", destinations: [.appearance, .privacy])
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+        .background(MFTheme.sheetBg)
+        .navigationTitle("设置")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                closeButton
+            }
+        }
+    }
+
+    private func iosGroupCard(title: String, destinations: [SettingsDestination]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(MFTheme.textSecondary)
+                .padding(.leading, 8)
+
+            VStack(spacing: 0) {
+                ForEach(Array(destinations.enumerated()), id: \.element) { index, dest in
+                    #if os(iOS)
+                    NavigationLink(value: dest) {
+                        iosRowContent(dest: dest)
+                    }
+                    .buttonStyle(.plain)
+                    #else
+                    Button {
+                        selectedDestination = dest
+                    } label: {
+                        iosRowContent(dest: dest)
+                    }
+                    .buttonStyle(.plain)
+                    #endif
+
+                    if index < destinations.count - 1 {
+                        Divider()
+                            .padding(.leading, 50)
+                            .opacity(0.25)
+                    }
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(MFTheme.resolveColor(
+                        light: Color.white,
+                        dark: Color.white.opacity(0.06)
+                    ))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(
+                                MFTheme.resolveColor(
+                                    light: Color.black.opacity(0.06),
+                                    dark: Color.white.opacity(0.08)
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+    }
+
+    private func iosRowContent(dest: SettingsDestination) -> some View {
         HStack(spacing: 12) {
-            MemoFlowWaveformBrandIcon(size: 32)
+            Image(systemName: dest.iconName)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(dest.iconColor)
+                .frame(width: 24, height: 24)
+
+            Text(dest.title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MFTheme.textPrimary)
+
+            Spacer()
+
+            Text(statusSummary(for: dest))
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(MFTheme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 160, alignment: .trailing)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(MFTheme.textMuted.opacity(0.6))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
+    }
+
+    private var closeButton: some View {
+        Button {
+            saveAllAndDismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(MFTheme.textPrimary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(MFTheme.resolveColor(
+                            light: Color.black.opacity(0.06),
+                            dark: Color.white.opacity(0.14)
+                        ))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("关闭设置")
+    }
+
+    // MARK: - Status Summaries for Home Rows
+
+    private func statusSummary(for dest: SettingsDestination) -> String {
+        switch dest {
+        case .asr:
+            switch selectedASRProvider {
+            case .appleLocal: return "Apple 本地识别"
+            case .whisperLocal: return "Whisper 本机模型"
+            case .siliconFlow:
+                let short = store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName
+                return "硅基流动 · \(short.isEmpty ? "SenseVoice" : short)"
+            case .groq: return "Groq · \(store.preferences.asrModelName)"
+            case .openAI: return "OpenAI · \(store.preferences.asrModelName)"
+            case .custom: return "自定义 ASR"
+            }
+        case .llm:
+            switch selectedLLMProvider {
+            case .localRules: return "本地规则引擎"
+            case .siliconFlow:
+                let short = store.preferences.llmModelName.components(separatedBy: "/").last ?? store.preferences.llmModelName
+                return "硅基流动 · \(short.isEmpty ? "Qwen2.5-7B" : short)"
+            case .deepSeek:
+                let short = store.preferences.llmModelName.components(separatedBy: "/").last ?? store.preferences.llmModelName
+                return "DeepSeek · \(short)"
+            case .qwen: return "通义千问 · \(store.preferences.llmModelName)"
+            case .doubao: return "豆包 · \(store.preferences.llmModelName)"
+            case .glm: return "智谱 GLM · \(store.preferences.llmModelName)"
+            case .kimi: return "Kimi · \(store.preferences.llmModelName)"
+            case .minimax: return "MiniMax · \(store.preferences.llmModelName)"
+            case .qianfan: return "百度千帆 · \(store.preferences.llmModelName)"
+            case .openAI: return "OpenAI · \(store.preferences.llmModelName)"
+            case .custom: return "自定义 LLM"
+            }
+        case .liveStreaming:
+            return store.preferences.liveStreamingTranscriptionEnabled ? "已开启" : "停止后统一处理"
+        case .speaker:
+            return store.preferences.speakerNicknameTheme.displayTitle
+        case .obsidian:
+            if let path = store.preferences.obsidianVaultRootPath, !path.isEmpty {
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                return "已连接 \(name.isEmpty ? "笔记库" : name)"
+            }
+            return "未连接"
+        case .memory:
+            let pending = store.personalMemories.filter { $0.status == .pendingReview }.count
+            let confirmed = store.personalMemories.filter { $0.status == .confirmed }.count
+            if pending > 0 { return "\(pending) 项待审阅" }
+            if confirmed > 0 { return "\(confirmed) 条已生效" }
+            return "未启用记忆"
+        case .calendar:
+            switch store.preferences.calendarCreationMode {
+            case .autoCreate: return "智能自动创建"
+            case .reviewFirst: return "审核后创建"
+            }
+        case .appearance:
+            switch store.preferences.appearanceTheme {
+            case .warmPaper: return "暖纸 (Light)"
+            case .darkNight: return "夜读 (Dark)"
+            case .system: return "跟随系统"
+            }
+        case .privacy:
+            let isConsented = store.processingConsent.grantedAt != nil && store.processingConsent.revokedAt == nil
+            return isConsented ? "已授权云端处理" : "仅端侧本地"
+        }
+    }
+
+    // MARK: - Subpage Destination View Router
+
+    @ViewBuilder
+    private func destinationView(for dest: SettingsDestination) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                #if os(macOS)
+                macSubpageHeader(dest: dest)
+                #endif
+
+                switch dest {
+                case .asr: asrSubpageContent
+                case .llm: llmSubpageContent
+                case .liveStreaming: liveStreamingSubpageContent
+                case .speaker: speakerSubpageContent
+                case .obsidian: obsidianSubpageContent
+                case .memory: memorySubpageContent
+                case .calendar: calendarSubpageContent
+                case .appearance: appearanceSubpageContent
+                case .privacy: privacySubpageContent
+                }
+            }
+            .padding(18)
+        }
+        .background(MFTheme.sheetBg)
+        .navigationTitle(dest.title)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+
+    #if os(macOS)
+    private func macSubpageHeader(dest: SettingsDestination) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: dest.iconName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(dest.iconColor)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("服务配置与偏好设置")
+                Text(dest.title)
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(MFTheme.textPrimary)
-                Text("点选服务商与模型即可切换，密钥安全加密保存在系统 Keychain")
+                Text("\(dest.groupName) · 设置项")
                     .font(.caption2)
                     .foregroundStyle(MFTheme.textSecondary)
             }
@@ -322,81 +797,48 @@ public struct SettingsView: View {
             Spacer()
 
             if savedToastVisible {
-                MFBadgePill("已自动保存", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                MFBadgePill("已保存", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
                     .transition(.opacity)
             }
 
-            MFLuminousActionButton("完成保存", icon: "checkmark") {
-                saveAllAndDismiss()
-            }
+            closeButton
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(MFTheme.recessedBg.opacity(0.85))
+        .padding(.bottom, 6)
     }
+    #endif
 
-    // MARK: - 0. Appearance Theme Card (PRD V1.3 VIS-001)
+    // MARK: - 1. ASR Subpage Content
 
-    private var appearanceThemeCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("视觉主题与阅读质感（VIS-001）", systemImage: "paintbrush.pointed.fill")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(MFTheme.iceBlue)
+    private var asrSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Explanation card
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("语音转写说明 (ASR)", systemImage: "info.circle.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                    Spacer()
+                    statusPill(
+                        isReady: selectedASRProvider == .whisperLocal ? localWhisperReady :
+                            (!selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                        readyText: selectedASRProvider == .appleLocal ? "端侧免 Key 已就绪" :
+                            (selectedASRProvider == .whisperLocal ? "本机模型已就绪" : "已配置密钥"),
+                        emptyText: selectedASRProvider == .whisperLocal ? "需安装本机模型与工具" : "待粘贴 API Key"
+                    )
+                }
+                Text("语音转写负责将录制音频（或边录边整理时的分段切片）转换为文字逐字稿，作为后续 AI 笔记提取的依据。首选推荐使用免费极速的阿里 SenseVoiceSmall（硅基流动托管）。")
+                    .font(.caption)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
-            Text("启发自 Readwise 极简暖纸阅读体验。为长篇逐字稿阅读提供温暖、克制、安静的书籍质感。")
-                .font(.caption2)
+            // Provider selection
+            Text("选择服务商")
+                .font(.caption.weight(.bold))
                 .foregroundStyle(MFTheme.textSecondary)
 
-            Picker("视觉主题", selection: Binding(
-                get: { store.preferences.appearanceTheme },
-                set: {
-                    store.preferences.appearanceTheme = $0
-                    store.saveToDisk()
-                }
-            )) {
-                ForEach(AppearanceTheme.allCases, id: \.self) { theme in
-                    Text(theme.displayTitle).tag(theme)
-                }
-            }
-            .pickerStyle(.segmented)
-        }
-        .mfGlassCard(cornerRadius: 14, padding: 14)
-    }
-
-    // MARK: - 1. ASR Selection Card
-
-    private var localWhisperReady: Bool {
-        #if os(macOS)
-        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MemoFlow/Models")
-        let hasTools = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"]
-            .contains { FileManager.default.isExecutableFile(atPath: $0) } &&
-            ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
-            .contains { FileManager.default.isExecutableFile(atPath: $0) }
-        return hasTools && FileManager.default.fileExists(atPath: directory.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path) &&
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent("ggml-silero-v6.2.0.bin").path)
-        #else
-        return false
-        #endif
-    }
-
-    private var asrSelectionCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("第一步：选择语音转写服务 (ASR)", systemImage: "waveform.badge.mic")
-                    .font(.subheadline.weight(.bold))
-                Spacer()
-                statusPill(
-                    isReady: selectedASRProvider == .whisperLocal ? localWhisperReady :
-                        (!selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
-                    readyText: selectedASRProvider == .appleLocal ? "端侧免 Key 已就绪" :
-                        (selectedASRProvider == .whisperLocal ? "本机模型已就绪" : "已配置密钥"),
-                    emptyText: selectedASRProvider == .whisperLocal ? "需安装本机模型与工具" : "待粘贴 API Key"
-                )
-            }
-
-            // 服务商网格点选卡片
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
                 ForEach(ASRProviderOption.availableCases) { option in
                     providerOptionTile(
                         title: option.title,
@@ -408,10 +850,12 @@ public struct SettingsView: View {
                     }
                 }
             }
-            Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
-                .font(.caption)
 
-            // 预置模型 + 动态拉取/自定义模型选择（点击弹出模型列表与搜索/添加）
+            Link("注册硅基流动账号（免费获取 API Key）↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
+                .font(.caption)
+                .foregroundStyle(MFTheme.iceCyan)
+
+            // Model selector
             if selectedASRProvider != .custom {
                 modelSelectorCardRow(
                     title: "选用语音识别模型",
@@ -431,14 +875,44 @@ public struct SettingsView: View {
                 }
             }
 
-            // 仅当所选服务需要 API Key 时显示粘贴框
+            // API Key input
             if selectedASRProvider.requiresAPIKey {
                 apiKeyInputRow(
                     title: "\(selectedASRProvider.title) API Key",
-                    placeholder: "点击右侧「粘贴」直接填入 \(selectedASRProvider.title) 密钥",
+                    placeholder: "点击右侧「粘贴」直接填入密钥",
                     text: $asrAPIKeyInput,
                     isPlainVisible: $showASRKeyPlain
                 )
+
+                // Connection Test Button
+                HStack(spacing: 10) {
+                    Button {
+                        testASRConnection()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isTestingASR {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "network")
+                            }
+                            Text(isTestingASR ? "正在测试连通性…" : "测试 ASR 接口连通性")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isTestingASR)
+
+                    if let res = asrTestResult {
+                        Text(res.message)
+                            .font(.caption2)
+                            .foregroundStyle(res.success ? MFTheme.mintGreen : MFTheme.coralRed)
+                            .lineLimit(2)
+                    }
+                }
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
@@ -471,25 +945,39 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - 2. LLM Selection Card
+    // MARK: - 2. LLM Subpage Content
 
-    private var llmSelectionCard: some View {
+    private var llmSubpageContent: some View {
         let isSharingKey = (selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow && shareSiliconFlowKey)
         let effectiveLLMKey = isSharingKey ? asrAPIKeyInput : llmAPIKeyInput
 
         return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("第二步：选择 AI 笔记与行动提取服务 (LLM)", systemImage: "sparkles.rectangle.stack.fill")
-                    .font(.subheadline.weight(.bold))
-                Spacer()
-                statusPill(
-                    isReady: !selectedLLMProvider.requiresAPIKey || !effectiveLLMKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    readyText: selectedLLMProvider == .localRules ? "本地规则已就绪" : "已配置密钥",
-                    emptyText: "待粘贴 API Key"
-                )
+            // Explanation card
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("AI 笔记整理说明 (LLM)", systemImage: "sparkles")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MFTheme.warmAmber)
+                    Spacer()
+                    statusPill(
+                        isReady: !selectedLLMProvider.requiresAPIKey || !effectiveLLMKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        readyText: selectedLLMProvider == .localRules ? "本地规则已就绪" : "已配置密钥",
+                        emptyText: "待粘贴 API Key"
+                    )
+                }
+                Text("AI 整理只接收转写出的文字逐字稿，负责提炼核心要点、会议纪要与有证据的待办日程。推荐使用免费极速的 Qwen2.5-7B（极速出稿）或进阶推理的 DeepSeek 系列。")
+                    .font(.caption)
+                    .foregroundStyle(MFTheme.textSecondary)
             }
+            .padding(12)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 10)], spacing: 10) {
+            // Provider selection
+            Text("选择服务商")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MFTheme.textSecondary)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
                 ForEach(LLMProviderOption.allCases) { option in
                     providerOptionTile(
                         title: option.title,
@@ -501,10 +989,12 @@ public struct SettingsView: View {
                     }
                 }
             }
-            Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
-                .font(.caption)
 
-            // 预置模型 + 动态拉取/自定义模型选择（点击弹出模型列表与搜索/添加）
+            Link("注册硅基流动账号（免费获取 API Key）↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
+                .font(.caption)
+                .foregroundStyle(MFTheme.warmAmber)
+
+            // Model selector
             if selectedLLMProvider != .custom {
                 modelSelectorCardRow(
                     title: "选用 AI 整理模型",
@@ -524,21 +1014,75 @@ public struct SettingsView: View {
                 }
             }
 
-            // 如果语音和 LLM 都选了硅基流动，提供「一键共用同一个 Key」开关，免填第二次！
+            // SiliconFlow key reuse toggle
             if selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow {
-                Toggle("直接复用上方「硅基流动」API Key（无需重复填写）", isOn: $shareSiliconFlowKey)
+                Toggle("直接复用上方「硅基流动」API Key（免填第二次）", isOn: $shareSiliconFlowKey)
                     .font(.caption.weight(.medium))
                     .padding(10)
                     .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
 
+            // API Key input
             if selectedLLMProvider.requiresAPIKey && !isSharingKey {
                 apiKeyInputRow(
                     title: "\(selectedLLMProvider.title) API Key",
-                    placeholder: "点击右侧「粘贴」直接填入 \(selectedLLMProvider.title) 密钥",
+                    placeholder: "点击右侧「粘贴」直接填入密钥",
                     text: $llmAPIKeyInput,
                     isPlainVisible: $showLLMKeyPlain
                 )
+            }
+
+            // Default Note Mode Selector
+            VStack(alignment: .leading, spacing: 8) {
+                Text("默认整理模式（录音完成后默认生成的笔记形态）")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Picker("默认整理模式", selection: Binding(
+                    get: { store.preferences.defaultNoteMode },
+                    set: {
+                        store.preferences.defaultNoteMode = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                )) {
+                    ForEach(NoteMode.allCases, id: \.self) { mode in
+                        Text(mode.displayTitle).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            // Connection Test Button
+            if selectedLLMProvider.requiresAPIKey {
+                HStack(spacing: 10) {
+                    Button {
+                        testLLMConnection()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isTestingLLM {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "network")
+                            }
+                            Text(isTestingLLM ? "正在测试连通性…" : "测试 LLM 接口连通性")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.warmAmber)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isTestingLLM)
+
+                    if let res = llmTestResult {
+                        Text(res.message)
+                            .font(.caption2)
+                            .foregroundStyle(res.success ? MFTheme.mintGreen : MFTheme.coralRed)
+                            .lineLimit(2)
+                    }
+                }
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
@@ -571,829 +1115,956 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - 2.5 Live Streaming & Incremental Organizing Card (Requirement 1-8)
+    // MARK: - 3. Live Streaming Subpage Content
 
-    private var liveStreamingCard: some View {
+    private var liveStreamingSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("边录边整理（实时流式分段转写）", systemImage: "sparkles.rectangle.stack.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MFTheme.iceCyan)
-                Spacer()
-                statusPill(
-                    isReady: store.preferences.liveStreamingTranscriptionEnabled,
-                    readyText: "实时整理开启",
-                    emptyText: "停止后统一处理"
-                )
-            }
-
-            Text("在录音过程中利用后台持续进行无缝样本级音频切片，增量生成与更新笔记草稿；录音停止后仅需处理最后收尾片段，将数分钟的等待缩短至秒级。")
-                .font(.caption2)
-                .foregroundStyle(MFTheme.textSecondary)
-
             Toggle(isOn: Binding(
                 get: { store.preferences.liveStreamingTranscriptionEnabled },
                 set: {
                     store.preferences.liveStreamingTranscriptionEnabled = $0
                     store.saveToDisk()
+                    showSavedFeedback()
                 }
             )) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("开启边录边整理模式")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.bold))
                         .foregroundStyle(MFTheme.textPrimary)
-                    Text("录音过程中持续转写，网络或服务失败绝不影响原音频录制")
+                    Text("录音过程中持续分段转写，增量生成可查看的笔记草稿；停止后复用已完成结果，只处理剩余片段并做最终合并。")
                         .font(.caption2)
                         .foregroundStyle(MFTheme.textSecondary)
                 }
             }
-            .toggleStyle(.switch)
+            .toggleStyle(SwitchToggleStyle(tint: MFTheme.iceCyan))
 
-            if store.preferences.liveStreamingTranscriptionEnabled {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("实时草稿增量刷新间隔")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(MFTheme.textPrimary)
-                        Spacer()
-                        Text("\(store.preferences.liveStreamingSummaryIntervalSeconds) 秒")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(MFTheme.iceBlue)
-                    }
+            Divider().opacity(0.1)
 
-                    Picker("刷新间隔", selection: Binding(
-                        get: { store.preferences.liveStreamingSummaryIntervalSeconds },
-                        set: {
-                            store.preferences.liveStreamingSummaryIntervalSeconds = $0
-                            store.saveToDisk()
-                        }
-                    )) {
-                        Text("45 秒（高灵敏度）").tag(45)
-                        Text("60 秒（推荐 · 平衡流畅与功耗）").tag(60)
-                        Text("90 秒（省流模式）").tag(90)
-                        Text("120 秒（极省 Token 模式）").tag(120)
-                    }
-                    .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("分段处理与频次说明", systemImage: "clock.arrow.circlepath")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.iceCyan)
+                Text("• 录音期间每 30 秒自动分段并在后台队列安全转写；\n• 增量草稿仅发送新增切片文字，严格避免重复向云端发送全量文本，控制费用与耗电；\n• 原音频无损保存于设备本地，转写失败绝不影响录音持续进行。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
 
-                    HStack(spacing: 6) {
-                        Image(systemName: "shield.checkered")
-                            .foregroundStyle(MFTheme.mintGreen)
-                        Text("费用控制保护：每次仅向模型提交新增段落与上一版提要，避免长录音重复上传全篇逐字稿引发高额费用。")
-                            .font(.caption2)
-                            .foregroundStyle(MFTheme.textSecondary)
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(12)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 8) {
+                Label("网络异常与断点恢复说明", systemImage: "wifi.exclamationmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.warmAmber)
+                Text("• 网络中断或信号微弱时，待处理切片将安全保留在本地日志队列中；网络恢复后自动断点续传；\n• 即使 App 异常退出或来电打断，下次启动亦可完整恢复处理进度。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }
 
-    // MARK: - 3. Speaker & Movie Character Nickname Theme (PRD V1.2 AI-001 & AI-003)
+    // MARK: - 4. Speaker & Nickname Subpage Content
 
-    private var speakerAndVoiceProfileCard: some View {
+    private var speakerSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("说话人识别与电影角色昵称", systemImage: "person.2.wave.2.fill")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("说话人分离与电影角色昵称主题")
                     .font(.subheadline.weight(.bold))
-                Spacer()
-                MFBadgePill(store.preferences.speakerNicknameTheme.displayTitle, color: MFTheme.softViolet)
+                    .foregroundStyle(MFTheme.softViolet)
+                Text("录音转写后，自动区分发言人，并依据所选主题赋予经典角色昵称（如《教父》《阿甘正传》《星际穿越》等），让纪要读起来更生动自然。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
             }
 
-            // 昵称主题切换
-            VStack(alignment: .leading, spacing: 6) {
-                Text("电影/剧集昵称主题（仅对服务商返回的说话人标识分配昵称；未识别时可人工标记）")
-                    .font(.caption)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("选择昵称主题")
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(MFTheme.textSecondary)
 
-                HStack(spacing: 8) {
-                    ForEach(SpeakerNicknameTheme.allCases, id: \.self) { theme in
-                        let isSelected = (store.preferences.speakerNicknameTheme == theme)
-                        Button {
-                            store.preferences.speakerNicknameTheme = theme
-                            store.saveToDisk()
-                        } label: {
-                            Text(theme.displayTitle)
-                                .font(.caption.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(
-                                    isSelected
-                                        ? MFTheme.softViolet.opacity(0.3)
-                                        : Color.white.opacity(0.06),
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .strokeBorder(isSelected ? MFTheme.softViolet.opacity(0.6) : Color.clear, lineWidth: 1)
-                                )
-                                .foregroundStyle(isSelected ? Color.white : MFTheme.textSecondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                Text("候选角色库：\(store.preferences.speakerNicknameTheme.defaultNicknames.joined(separator: "、"))")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textMuted)
-            }
-
-            Divider().overlay(Color.white.opacity(0.08))
-
-            // 个人声纹档案（AI-001：识别我的声音）
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("个人声音档案 · 身份识别待接入", systemImage: "waveform.badge.mic")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(MFTheme.textPrimary)
-                    Spacer()
-                    if store.preferences.userVoiceProfile != nil {
-                        MFBadgePill("已保留历史档案", color: MFTheme.textSecondary, icon: "person")
-                    } else {
-                        MFBadgePill("未录入声纹", color: MFTheme.warmAmber)
-                    }
-                }
-
-                if let profile = store.preferences.userVoiceProfile {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(profile.featureDescription)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(MFTheme.textPrimary)
-                            Text("录入时间：\(profile.enrolledAt.formatted(date: .numeric, time: .shortened)) · 录音中将自动标记「我」的发言")
-                                .font(.caption2)
-                                .foregroundStyle(MFTheme.textSecondary)
-                        }
-                        Spacer()
-                        Button("重新录入") {
-                            store.enrollVoiceProfile(sampleDuration: 6.0, description: "已更新个人声纹特征档案")
-                        }
-                        .disabled(true)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(MFTheme.iceCyan)
-                        .buttonStyle(.plain)
-
-                        Button("删除档案") {
-                            store.deleteVoiceProfile()
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(MFTheme.coralRed)
-                        .buttonStyle(.plain)
-                    }
-                    .padding(10)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-                } else {
-                    HStack {
-                        Text("当前版本尚无声纹匹配引擎。可在逐字稿中手动设置昵称或「我」；不会根据发言顺序猜测身份。")
-                            .font(.caption2)
-                            .foregroundStyle(MFTheme.textSecondary)
-                        Spacer()
-                        MFLuminousActionButton("录入我的声音", icon: "mic.fill", tint: MFTheme.mintGreen) {
-                            store.enrollVoiceProfile(sampleDuration: 6.0, description: "已录入个人声纹特征档案（高置信度）")
-                        }
-                        .disabled(true)
-                    }
-                    .padding(10)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-                }
-            }
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 4. Calendar Sync Mode Card (PRD V1.2 CAL-003)
-
-    private var calendarSyncModeCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("苹果日历智能同步偏好", systemImage: "calendar.badge.clock")
-                    .font(.subheadline.weight(.bold))
-                Spacer()
-                MFBadgePill(store.preferences.calendarCreationMode.displayTitle, color: MFTheme.iceCyan)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(CalendarCreationMode.allCases, id: \.self) { mode in
-                    let isSelected = (store.preferences.calendarCreationMode == mode)
-                    Button {
-                        store.preferences.calendarCreationMode = mode
+                Picker("主题", selection: Binding(
+                    get: { store.preferences.speakerNicknameTheme },
+                    set: {
+                        store.preferences.speakerNicknameTheme = $0
                         store.saveToDisk()
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(isSelected ? MFTheme.iceCyan : MFTheme.textMuted)
-                                .font(.subheadline)
-                                .padding(.top, 2)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(mode.displayTitle)
-                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(isSelected ? Color.white : MFTheme.textPrimary)
-                                Text(mode.subtitle)
-                                    .font(.caption2)
-                                    .foregroundStyle(MFTheme.textSecondary)
-                            }
-                            Spacer()
-                        }
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(isSelected ? MFTheme.iceBlue.opacity(0.12) : Color.white.opacity(0.03))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .strokeBorder(isSelected ? MFTheme.iceBlue.opacity(0.35) : Color.clear, lineWidth: 1)
-                                )
-                        )
+                        showSavedFeedback()
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 5. Obsidian Integration Card (PRD R15)
-
-    private var obsidianIntegrationCard: some View {
-        let boundVault = store.preferences.obsidianVaultRootPath ?? ""
-
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Obsidian 笔记库联动（一键直写 / 自动归档）", systemImage: "books.vertical.fill")
-                    .font(.subheadline.weight(.bold))
-                Spacer()
-                statusPill(
-                    isReady: !boundVault.isEmpty,
-                    readyText: "已绑定笔记库",
-                    emptyText: "未选择目录"
-                )
-            }
-
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("当前绑定笔记库路径")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text(boundVault.isEmpty ? "尚未选择（点右侧按钮选择你的 Obsidian 库目录）" : boundVault)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(boundVault.isEmpty ? .secondary : .primary)
-                        .lineLimit(2)
-                }
-
-                Spacer()
-
-                Button {
-                    choosingVault = true
-                } label: {
-                    Label("选择文件夹…", systemImage: "folder.badge.plus")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.purple.opacity(0.15), in: Capsule())
-                        .foregroundStyle(.purple)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-
-            Toggle("允许本机读取并建立历史笔记索引（用于本机跨笔记检索与离线规则关联）", isOn: $store.preferences.knowledgeContextEnabled)
-                .onChange(of: store.preferences.knowledgeContextEnabled) { _, enabled in
-                    if !enabled {
-                        store.preferences.allowSendingKnowledgeToCloudLLM = false
-                    }
-                    store.saveToDisk()
-                    Task { await store.refreshKnowledge() }
-                }
-
-            Toggle("允许将命中的历史笔记片段与已确认个人记忆发送至云端 LLM", isOn: $store.preferences.allowSendingKnowledgeToCloudLLM)
-                .disabled(!store.preferences.knowledgeContextEnabled)
-                .onChange(of: store.preferences.allowSendingKnowledgeToCloudLLM) { _, _ in
-                    store.saveToDisk()
-                }
-
-            Text(
-                store.preferences.allowSendingKnowledgeToCloudLLM
-                    ? "已授权发送：整理时最多附带 4 篇相关笔记片段（单篇 ≤ 900 字符）及已确认的个人记忆至 \(store.preferences.llmBaseURL.isEmpty ? "本地规则引擎" : store.preferences.llmBaseURL)。"
-                    : "仅本机检索模式：历史笔记与个人记忆只在本机参与关键词检索和问答，不会随请求发送给云端大模型。"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            // P1-5 可选择的检索文件夹范围管理
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("限定检索文件夹范围（留空表示检索全部未排除目录）")
-                        .font(.caption.weight(.medium))
-                    Spacer()
-                    if !store.preferences.knowledgeIncludedFolders.isEmpty {
-                        Button("恢复全部目录") {
-                            store.preferences.knowledgeIncludedFolders = []
-                            store.saveToDisk()
-                            Task { await store.refreshKnowledge() }
-                        }
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(MFTheme.iceCyan)
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                let candidateFolders = Array(
-                    Set(store.availableVaultTopFolders + store.preferences.knowledgeIncludedFolders)
-                ).sorted()
-
-                if !candidateFolders.isEmpty {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
-                        ForEach(candidateFolders, id: \.self) { folder in
-                            let isInc = store.preferences.knowledgeIncludedFolders.contains(folder)
-                            Button {
-                                if isInc {
-                                    store.preferences.knowledgeIncludedFolders.removeAll { $0 == folder }
-                                } else {
-                                    store.preferences.knowledgeIncludedFolders.append(folder)
-                                }
-                                store.saveToDisk()
-                                Task { await store.refreshKnowledge() }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: isInc ? "checkmark.circle.fill" : "folder")
-                                    Text(folder)
-                                        .lineLimit(1)
-                                }
-                                .font(.caption2.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 8)
-                                .background(
-                                    isInc ? MFTheme.iceBlue.opacity(0.22) : Color.secondary.opacity(0.1),
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .foregroundStyle(isInc ? MFTheme.iceCyan : .primary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    TextField("手动添加检索子目录（如 Projects/Audio）", text: $customIncludedFolderInput)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                    Button("加入范围") {
-                        let cleaned = customIncludedFolderInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                        guard !cleaned.isEmpty else { return }
-                        if !store.preferences.knowledgeIncludedFolders.contains(cleaned) {
-                            store.preferences.knowledgeIncludedFolders.append(cleaned)
-                            store.saveToDisk()
-                            Task { await store.refreshKnowledge() }
-                        }
-                        customIncludedFolderInput = ""
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .buttonStyle(.bordered)
-                }
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-
-            Text("不读取的排除文件夹（相对知识库路径，每行一个，优先级高于包含范围）")
-                .font(.caption)
-            TextEditor(text: $store.preferences.knowledgeExcludedFolders)
-                .frame(height: 60)
-                .onChange(of: store.preferences.knowledgeExcludedFolders) { _, _ in store.saveToDisk() }
-            Text("自动排除隐藏目录和 MemoFlow 导出目录，避免重复引用自己的整理结果。")
-                .font(.caption2).foregroundStyle(.secondary)
-            Text(store.knowledgeStatus).font(.caption)
-            HStack {
-                Button(store.isRefreshingKnowledge ? "正在刷新…" : "刷新知识库") {
-                    Task { await store.refreshKnowledge() }
-                }.disabled(store.isRefreshingKnowledge)
-                Button("断开知识库", role: .destructive) { store.disconnectObsidianVault() }
-            }
-
-            // 存放子目录点选或自定义
-            VStack(alignment: .leading, spacing: 6) {
-                Text("存入库内的目标子文件夹（不存在时会自动创建）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    ForEach(["MemoFlow笔记", "00_Inbox", "justesine"], id: \.self) { folder in
-                        Button {
-                            store.preferences.obsidianTargetSubfolder = folder
-                            store.saveToDisk()
-                        } label: {
-                            Text(folder)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(
-                                    store.preferences.obsidianTargetSubfolder == folder
-                                        ? Color.purple
-                                        : Color.secondary.opacity(0.12),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(store.preferences.obsidianTargetSubfolder == folder ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            Toggle("录音转写并完成 AI 整理后，自动生成 .md 写入上述 Obsidian 目录", isOn: $store.preferences.autoExportToObsidianOnComplete)
-                .font(.caption.weight(.medium))
-                .onChange(of: store.preferences.autoExportToObsidianOnComplete) { _, _ in
-                    store.saveToDisk()
-                }
-
-            Divider().overlay(Color.white.opacity(0.08))
-
-            // P2-7：iPhone 与 Mac 跨设备音频可用性策略
-            VStack(alignment: .leading, spacing: 8) {
-                Label("跨设备音频可用性策略（iPhone ⇄ Mac）", systemImage: "iphone.and.arrow.forward")
-                    .font(.caption.weight(.bold))
-
-                Picker("跨设备音频策略", selection: $store.preferences.audioSyncMode) {
-                    ForEach(AudioSyncMode.allCases, id: \.self) { mode in
-                        Text(mode.displayTitle).tag(mode)
-                    }
-                }
-                .pickerStyle(.menu)
-                .font(.caption)
-                .onChange(of: store.preferences.audioSyncMode) { _, _ in
-                    store.saveToDisk()
-                }
-
-                Text(store.preferences.audioSyncMode.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    Text("音频附件相对目录：")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField("MemoFlow笔记/Attachments", text: $store.preferences.obsidianAudioAttachmentSubfolder)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                        .onChange(of: store.preferences.obsidianAudioAttachmentSubfolder) { _, _ in
-                            store.saveToDisk()
-                        }
-                }
-
-                Text("导出时仅写入相对于 Obsidian 笔记库根目录的路径（如 MemoFlow笔记/Attachments/rec_<ID>.m4a），绝不写入仅单机有效的 /Users/... 绝对路径。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 5b. Personal Memory Review & Management Card (P1-5)
-
-    private var personalMemoryManagementCard: some View {
-        let pendingCount = store.personalMemories.filter { $0.status == .pendingReview }.count
-        let confirmedCount = store.personalMemories.filter { $0.status == .confirmed }.count
-
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("个人记忆审阅与术语库管理", systemImage: "brain.head.profile")
-                    .font(.subheadline.weight(.bold))
-                Spacer()
-                if pendingCount > 0 {
-                    MFBadgePill("\(pendingCount) 条待审阅", color: MFTheme.warmAmber)
-                }
-                MFBadgePill("\(confirmedCount) 条已生效", color: MFTheme.mintGreen)
-            }
-
-            Text("提取的项目背景、常用术语与协作者必须经你确认后才会生效；仅当上方开启「允许发送至云端 LLM」时才会随请求发送。")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Picker("类别", selection: $newMemoryCategory) {
-                    ForEach(PersonalMemoryCategory.allCases, id: \.self) { cat in
-                        Text(cat.displayTitle).tag(cat)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 110)
-
-                TextField("词条 / 术语 / 项目名", text: $newMemoryKeyInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.caption)
-
-                TextField("背景说明（如：Denon DR-F2 磁带卡座）", text: $newMemoryValueInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.caption)
-
-                Button("新增生效") {
-                    _ = store.addPersonalMemory(
-                        category: newMemoryCategory,
-                        key: newMemoryKeyInput,
-                        value: newMemoryValueInput,
-                        status: .confirmed
-                    )
-                    newMemoryKeyInput = ""
-                    newMemoryValueInput = ""
-                }
-                .font(.caption2.weight(.semibold))
-                .buttonStyle(.borderedProminent)
-                .disabled(newMemoryKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            if store.personalMemories.isEmpty {
-                Text("暂无个人记忆词条。可在任意录音详情页右上角菜单点击「提取待审阅个人记忆候选」或在上方手动添加。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(store.personalMemories) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            if editingMemoryId == item.id {
-                                HStack(spacing: 8) {
-                                    Picker("类别", selection: $editingMemoryCategory) {
-                                        ForEach(PersonalMemoryCategory.allCases, id: \.self) { cat in
-                                            Text(cat.displayTitle).tag(cat)
-                                        }
-                                    }
-                                    .frame(width: 105)
-
-                                    TextField("词条名", text: $editingMemoryKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.caption)
-
-                                    TextField("说明", text: $editingMemoryValue)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.caption)
-
-                                    Button("保存") {
-                                        store.updatePersonalMemory(
-                                            id: item.id,
-                                            category: editingMemoryCategory,
-                                            key: editingMemoryKey,
-                                            value: editingMemoryValue,
-                                            status: .confirmed
-                                        )
-                                        editingMemoryId = nil
-                                    }
-                                    .font(.caption2.weight(.semibold))
-                                    .buttonStyle(.borderedProminent)
-
-                                    Button("取消") {
-                                        editingMemoryId = nil
-                                    }
-                                    .font(.caption2)
-                                    .buttonStyle(.plain)
-                                }
-                            } else {
-                                HStack(alignment: .center, spacing: 8) {
-                                    MFBadgePill(
-                                        item.category.displayTitle,
-                                        color: MFTheme.iceCyan
-                                    )
-                                    Text(item.key)
-                                        .font(.caption.weight(.bold))
-                                    if !item.value.isEmpty {
-                                        Text("— \(item.value)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    MFBadgePill(
-                                        item.status.displayTitle,
-                                        color: item.status == .confirmed ? MFTheme.mintGreen : MFTheme.warmAmber
-                                    )
-                                    if item.status == .pendingReview {
-                                        Button("确认") {
-                                            store.confirmPersonalMemory(item.id)
-                                        }
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(MFTheme.mintGreen)
-                                        .buttonStyle(.plain)
-                                    }
-                                    Button("编辑") {
-                                        editingMemoryId = item.id
-                                        editingMemoryCategory = item.category
-                                        editingMemoryKey = item.key
-                                        editingMemoryValue = item.value
-                                    }
-                                    .font(.caption2)
-                                    .foregroundStyle(MFTheme.iceCyan)
-                                    .buttonStyle(.plain)
-
-                                    Button("删除", role: .destructive) {
-                                        store.deletePersonalMemory(item.id)
-                                    }
-                                    .font(.caption2)
-                                    .foregroundStyle(MFTheme.coralRed)
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                }
-            }
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 4. Routing & Time Preferences Card
-
-    private var routingAndTimePreferencesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("默认整理与分流偏好", systemImage: "arrow.triangle.branch")
-                .font(.subheadline.weight(.bold))
-
-            // 默认整理模式分段选择
-            VStack(alignment: .leading, spacing: 6) {
-                Text("新录音默认整理模式")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("新录音默认整理模式", selection: $store.preferences.defaultNoteMode) {
-                    ForEach(NoteMode.allCases, id: \.self) { mode in
-                        Text(mode.displayTitle).tag(mode)
+                )) {
+                    ForEach(SpeakerNicknameTheme.allCases, id: \.self) { theme in
+                        Text(theme.displayTitle).tag(theme)
                     }
                 }
                 .pickerStyle(.segmented)
             }
 
-            // 待办默认主要去向点选胶囊
-            VStack(alignment: .leading, spacing: 6) {
-                Text("待办任务默认主要去向（单一主要管理位置，避免重复维护状态）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    ForEach([PrimaryDestination.reminders, .markdown, .local], id: \.self) { dest in
-                        Button {
-                            store.preferences.defaultTaskDestination = dest
-                            store.saveToDisk()
-                        } label: {
-                            Text(dest.displayTitle)
-                                .font(.caption.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(
-                                    store.preferences.defaultTaskDestination == dest
-                                        ? Color.accentColor
-                                        : Color.secondary.opacity(0.12),
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .foregroundStyle(store.preferences.defaultTaskDestination == dest ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            // 无结束时间日程默认时长点选（不让用户按步进器慢慢点）
-            VStack(alignment: .leading, spacing: 6) {
-                Text("只有开始时间、未提结束时间的日程默认时长（审核卡片中会明确标注「默认值」）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    ForEach([15, 30, 45, 60, 90], id: \.self) { mins in
-                        Button {
-                            store.preferences.defaultEventDurationMinutes = mins
-                            store.saveToDisk()
-                        } label: {
-                            Text("\(mins) 分钟")
-                                .font(.caption.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 7)
-                                .background(
-                                    store.preferences.defaultEventDurationMinutes == mins
-                                        ? Color.accentColor.opacity(0.18)
-                                        : Color.secondary.opacity(0.1),
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .foregroundStyle(store.preferences.defaultEventDurationMinutes == mins ? Color.accentColor : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 4. Privacy & System Permissions Card
-
-    private var privacyAndPermissionsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("云处理授权与系统日历 / 提醒事项权限", systemImage: "lock.shield")
-                .font(.subheadline.weight(.bold))
-
-            HStack(spacing: 8) {
-                ForEach(ConsentMode.allCases, id: \.self) { mode in
-                    Button {
-                        store.processingConsent.mode = mode
-                        if mode == .remembered {
-                            store.processingConsent.grantedAt = Date()
-                            store.processingConsent.revokedAt = nil
-                        }
-                        store.saveToDisk()
-                    } label: {
-                        Text(mode.displayTitle)
-                            .font(.caption.weight(.medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(
-                                store.processingConsent.mode == mode
-                                    ? Color.blue.opacity(0.16)
-                                    : Color.secondary.opacity(0.1),
-                                in: RoundedRectangle(cornerRadius: 8)
-                            )
-                            .foregroundStyle(store.processingConsent.mode == mode ? Color.blue : .primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    Task {
-                        _ = await EventKitIntegrationService.shared.requestCalendarAccess()
-                        refreshContainers()
-                    }
-                } label: {
-                    Label("授权并刷新 Apple 日历 (\(writableCalendars.count))", systemImage: "calendar.badge.plus")
-                        .font(.caption.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    Task {
-                        _ = await EventKitIntegrationService.shared.requestRemindersAccess()
-                        refreshContainers()
-                    }
-                } label: {
-                    Label("授权并刷新提醒事项 (\(writableReminderLists.count))", systemImage: "checklist")
-                        .font(.caption.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
-    }
-
-    // MARK: - 5. Storage & Demo Reset Card
-
-    private var storageAndResetCard: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("本地录音与测试数据")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("个人声纹档案（AI-001：我的专属声音）")
                     .font(.caption.weight(.bold))
-                Text("已存录音 \(store.recordings.count) 条 · 审计日志 \(store.operationLogs.count) 条")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                if let profile = store.preferences.userVoiceProfile {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.featureDescription)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(MFTheme.textPrimary)
+                            Text("录入时长: \(Int(profile.sampleDuration)) 秒 · 录音整理时自动标记为本人发言")
+                                .font(.caption2)
+                                .foregroundStyle(MFTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button("清除档案") {
+                            store.deleteVoiceProfile()
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(10)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    HStack {
+                        Text("暂未录入声纹档案")
+                            .font(.caption2)
+                            .foregroundStyle(MFTheme.textMuted)
+                        Spacer()
+                        Button("录入声纹档案") {
+                            store.enrollVoiceProfile(sampleDuration: 6.0)
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(10)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                }
             }
-            Spacer()
-            Button {
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("说话人名称手动管理", systemImage: "pencil.and.outline")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.softViolet)
+                Text("在任意单篇笔记的「转写逐字稿」详情中，点击说话人头像或标签，可直接修改发言人姓名；修改将自动级联同步更新该录音内的所有历史发言片段。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 5. Obsidian Subpage Content
+
+    private var obsidianSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Obsidian 笔记库联动", systemImage: "book.pages")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(MFTheme.warmAmber)
+                    Spacer()
+                    if let path = store.preferences.obsidianVaultRootPath, !path.isEmpty {
+                        MFBadgePill("已连接", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                    } else {
+                        MFBadgePill("未配置", color: MFTheme.textMuted, icon: "circle")
+                    }
+                }
+                Text("将 MemoFlow 整理的结构化笔记导出到指定的 Obsidian 笔记库，生成带双向链接、原话溯源与音频相对引用的原生 Markdown。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("当前绑定的笔记库根目录：")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                    Text(store.preferences.obsidianVaultRootPath ?? "尚未选择 Obsidian 库目录")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(MFTheme.textPrimary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button("选择文件夹…") {
+                    choosingVault = true
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+            }
+
+            Toggle("AI 整理完成后自动写入 Obsidian 库", isOn: Binding(
+                get: { store.preferences.autoExportToObsidianOnComplete },
+                set: {
+                    store.preferences.autoExportToObsidianOnComplete = $0
+                    store.saveToDisk()
+                    showSavedFeedback()
+                }
+            ))
+            .font(.caption)
+
+            Toggle("跨设备同步音频副本至笔记库附件目录 (P2-7)", isOn: Binding(
+                get: { store.preferences.audioSyncMode == .vaultAttachmentCopy },
+                set: {
+                    store.preferences.audioSyncMode = $0 ? .vaultAttachmentCopy : .localOnly
+                    store.saveToDisk()
+                    showSavedFeedback()
+                }
+            ))
+            .font(.caption)
+
+            if store.preferences.audioSyncMode == .vaultAttachmentCopy {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("附件相对存放路径")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(MFTheme.textSecondary)
+                    TextField("例如：MemoFlow笔记/Attachments", text: Binding(
+                        get: { store.preferences.obsidianAudioAttachmentSubfolder },
+                        set: {
+                            store.preferences.obsidianAudioAttachmentSubfolder = $0
+                            store.saveToDisk()
+                            showSavedFeedback()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Obsidian 目标存放子目录")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(MFTheme.textSecondary)
+                TextField("如：MemoFlow笔记", text: Binding(
+                    get: { store.preferences.obsidianTargetSubfolder },
+                    set: {
+                        store.preferences.obsidianTargetSubfolder = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 6. Personal Memory Subpage Content
+
+    private var memorySubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("个人记忆管理 (P1-5)", systemImage: "brain.head.profile")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MFTheme.softViolet)
+                Text("记录您独特的专有名词、业务术语、人际关系与项目代号。AI 在整理时会参考已确认记忆，输出更懂您的笔记。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+
+            memoryPendingSection
+            memoryConfirmedSection
+            memoryManualAddSection
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    @ViewBuilder
+    private var memoryPendingSection: some View {
+        let pending = store.personalMemories.filter { $0.status == .pendingReview }
+        if !pending.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("待确认候选记忆 (\(pending.count))")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MFTheme.warmAmber)
+                    Spacer()
+                    Button("一键采纳全部") {
+                        for item in pending {
+                            store.confirmPersonalMemory(item.id)
+                        }
+                    }
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(MFTheme.iceCyan)
+                }
+
+                ForEach(pending) { item in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(item.category.displayTitle) · \(item.key)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(MFTheme.textPrimary)
+                            Text(item.value)
+                                .font(.caption2)
+                                .foregroundStyle(MFTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button("采纳") {
+                            store.confirmPersonalMemory(item.id)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+
+                        Button("忽略") {
+                            store.deletePersonalMemory(item.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var memoryConfirmedSection: some View {
+        let confirmed = store.personalMemories.filter { $0.status == .confirmed }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("已确认生效的记忆 (\(confirmed.count))")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MFTheme.textSecondary)
+
+            if confirmed.isEmpty {
+                Text("暂无生效记忆，可在下方手动添加或由录音整理时自动发现。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textMuted)
+            } else {
+                ForEach(confirmed) { item in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(item.category.displayTitle) · \(item.key)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(MFTheme.textPrimary)
+                            Text(item.value)
+                                .font(.caption2)
+                                .foregroundStyle(MFTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            store.deletePersonalMemory(item.id)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(MFTheme.coralRed)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    private var memoryManualAddSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("+ 手动添加一条记忆")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MFTheme.iceCyan)
+
+            HStack(spacing: 6) {
+                Picker("", selection: $newMemoryCategory) {
+                    ForEach(PersonalMemoryCategory.allCases, id: \.self) { c in
+                        Text(c.displayTitle).tag(c)
+                    }
+                }
+                .frame(width: 90)
+
+                TextField("条目/术语名", text: $newMemoryKeyInput)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("释义/说明", text: $newMemoryValueInput)
+                    .textFieldStyle(.roundedBorder)
+
+                Button("保存") {
+                    let k = newMemoryKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let v = newMemoryValueInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !k.isEmpty, !v.isEmpty else { return }
+                    store.addPersonalMemory(category: newMemoryCategory, key: k, value: v, status: .confirmed)
+                    newMemoryKeyInput = ""
+                    newMemoryValueInput = ""
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    // MARK: - 7. Calendar Subpage Content
+
+    private var calendarSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("日历与提醒事项联动 (CAL-003)", systemImage: "calendar.badge.clock")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MFTheme.mintGreen)
+                Text("将录音与纪要中识别出的待办、日程与承诺事项，同步至 Apple 系统自带的「日历」与「提醒事项」。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("日程创建模式")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Picker("创建模式", selection: Binding(
+                    get: { store.preferences.calendarCreationMode },
+                    set: {
+                        store.preferences.calendarCreationMode = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                )) {
+                    Text("需手动确认").tag(CalendarCreationMode.reviewFirst)
+                    Text("智能自动创建").tag(CalendarCreationMode.autoCreate)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if !writableCalendars.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("目标系统日历：")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(MFTheme.textSecondary)
+                    Picker("目标日历", selection: Binding(
+                        get: { store.preferences.preferredCalendarIdentifier ?? writableCalendars.first?.id ?? "" },
+                        set: {
+                            store.preferences.preferredCalendarIdentifier = $0
+                            store.saveToDisk()
+                            showSavedFeedback()
+                        }
+                    )) {
+                        ForEach(writableCalendars) { cal in
+                            Text(cal.title).tag(cal.id)
+                        }
+                    }
+                }
+            }
+
+            if !writableReminderLists.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("目标系统提醒事项列表：")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(MFTheme.textSecondary)
+                    Picker("目标提醒事项", selection: Binding(
+                        get: { store.preferences.preferredReminderListIdentifier ?? writableReminderLists.first?.id ?? "" },
+                        set: {
+                            store.preferences.preferredReminderListIdentifier = $0
+                            store.saveToDisk()
+                            showSavedFeedback()
+                        }
+                    )) {
+                        ForEach(writableReminderLists) { rem in
+                            Text(rem.title).tag(rem.id)
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("默认日程时长")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Picker("时长", selection: Binding(
+                    get: { store.preferences.defaultEventDurationMinutes },
+                    set: {
+                        store.preferences.defaultEventDurationMinutes = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                )) {
+                    Text("15 分钟").tag(15)
+                    Text("30 分钟").tag(30)
+                    Text("60 分钟").tag(60)
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+        .onAppear {
+            refreshContainers()
+        }
+    }
+
+    // MARK: - 8. Appearance Subpage Content
+
+    private var appearanceSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("视觉主题与阅读质感（VIS-001）", systemImage: "paintbrush.pointed.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MFTheme.iceBlue)
+                Text("启发自 Readwise 极简暖纸阅读体验。为长篇逐字稿阅读提供温暖、克制、安静的书籍质感。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+
+            Picker("视觉主题", selection: Binding(
+                get: { store.preferences.appearanceTheme },
+                set: {
+                    store.preferences.appearanceTheme = $0
+                    store.saveToDisk()
+                    showSavedFeedback()
+                }
+            )) {
+                ForEach(AppearanceTheme.allCases, id: \.self) { theme in
+                    Text(theme.displayTitle).tag(theme)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            // Live theme preview card
+            VStack(alignment: .leading, spacing: 8) {
+                Text("当前排版质感预览")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("会议纪要 · 品牌战略研讨会")
+                        .font(.system(size: 14, weight: .bold, design: .serif))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text("“通过 AI 与功效靶点筛选，建立专属人群数据库，实现从研发到产品端的高效闭环。”")
+                        .font(.system(size: 12, design: .serif))
+                        .foregroundStyle(MFTheme.textSecondary)
+                        .lineSpacing(3)
+                }
+                .padding(12)
+                .background(MFTheme.cardBgTop, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 9. Privacy & Data Subpage Content
+
+    private var privacySubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("隐私透明与系统权限", systemImage: "hand.raised.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MFTheme.coralRed)
+                Text("原音频仅存放于设备内部；转写或 AI 整理前若涉及云端，均须获得明确授权；您可随时一键撤回授权或重置数据。")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+
+            // Cloud Processing Consent
+            let isConsented = store.processingConsent.grantedAt != nil && store.processingConsent.revokedAt == nil
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("云端大模型与 ASR 处理授权")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text(isConsented ? "已授权：录音可使用云端 API" : "未授权：仅允许在端侧离线运行")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+                Spacer()
+                if isConsented {
+                    Button("撤回授权") {
+                        store.revokeCloudProcessingConsent()
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("授予授权") {
+                        store.grantCloudProcessingConsent(rememberPreference: true)
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Toggle("允许向云端大模型发送本地检索上下文与个人记忆 (P1-5)", isOn: Binding(
+                get: { store.preferences.allowSendingKnowledgeToCloudLLM },
+                set: {
+                    store.preferences.allowSendingKnowledgeToCloudLLM = $0
+                    store.saveToDisk()
+                    showSavedFeedback()
+                }
+            ))
+            .font(.caption)
+
+            Divider().opacity(0.1)
+
+            // Local storage info
+            VStack(alignment: .leading, spacing: 4) {
+                Text("本地存储位置：")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(MFTheme.textSecondary)
+                Text(store.persistenceURL.path)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(MFTheme.textPrimary)
+                    .lineLimit(2)
+            }
+
+            Divider().opacity(0.1)
+
+            // Reset demo data
+            Button(role: .destructive) {
                 showingResetConfirmation = true
             } label: {
-                Label("重置 PRD 演示样本", systemImage: "arrow.counterclockwise")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.counterclockwise.circle.fill")
+                    Text("恢复出厂预置演示场景数据…")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MFTheme.coralRed)
             }
             .buttonStyle(.plain)
-            .confirmationDialog(
-                "确定重置为演示样本吗？",
-                isPresented: $showingResetConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("确认重置（将清除当前列表）", role: .destructive) {
-                    store.seedPRDDefaultScenarios()
-                    store.saveToDisk()
-                    dismiss()
-                }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("此操作将把录音列表恢复为 PRD 标准测试场景，现有录音将从列表移除（本地音频文件仍保留在 Documents 文件夹）。")
-            }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - Helper Methods & Actions
+
+    private func showSavedFeedback() {
+        withAnimation { savedToastVisible = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation { self.savedToastVisible = false }
+        }
+    }
+
+    private func saveAllAndDismiss() {
+        autoSaveKeys()
+        store.saveToDisk()
+        dismiss()
+    }
+
+    private func autoSaveKeys() {
+        let asrSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .asrAPIKey, endpoint: store.preferences.asrBaseURL)
+        let llmSaved: Bool
+        if selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow && shareSiliconFlowKey {
+            llmSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
+        } else {
+            llmSaved = KeychainService.shared.saveKey(llmAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
+        }
+        if asrSaved || llmSaved {
+            showSavedFeedback()
+        }
+        store.saveToDisk()
+    }
+
+    private func loadCurrentSelectionState() {
+        // Match ASR provider
+        if store.preferences.asrEngineMode == .appleOnDevice {
+            selectedASRProvider = .appleLocal
+        } else if store.preferences.asrEngineMode == .localWhisper {
+            selectedASRProvider = .whisperLocal
+        } else if store.preferences.asrBaseURL.contains("siliconflow") {
+            selectedASRProvider = .siliconFlow
+        } else if store.preferences.asrBaseURL.contains("groq") {
+            selectedASRProvider = .groq
+        } else if store.preferences.asrBaseURL.contains("openai") {
+            selectedASRProvider = .openAI
+        } else {
+            selectedASRProvider = .custom
+        }
+
+        // Match LLM provider
+        if store.preferences.llmBaseURL.isEmpty || store.preferences.llmModelName == "local-heuristic" {
+            selectedLLMProvider = .localRules
+        } else if store.preferences.llmBaseURL.contains("siliconflow") {
+            selectedLLMProvider = .siliconFlow
+        } else if store.preferences.llmBaseURL.contains("deepseek") {
+            selectedLLMProvider = .deepSeek
+        } else if store.preferences.llmBaseURL.contains("aliyuncs") || store.preferences.llmBaseURL.contains("dashscope") {
+            selectedLLMProvider = .qwen
+        } else if store.preferences.llmBaseURL.contains("volces") {
+            selectedLLMProvider = .doubao
+        } else if store.preferences.llmBaseURL.contains("bigmodel") {
+            selectedLLMProvider = .glm
+        } else if store.preferences.llmBaseURL.contains("moonshot") {
+            selectedLLMProvider = .kimi
+        } else if store.preferences.llmBaseURL.contains("minimax") {
+            selectedLLMProvider = .minimax
+        } else if store.preferences.llmBaseURL.contains("baidubce") || store.preferences.llmBaseURL.contains("qianfan") {
+            selectedLLMProvider = .qianfan
+        } else if store.preferences.llmBaseURL.contains("openai") {
+            selectedLLMProvider = .openAI
+        } else {
+            selectedLLMProvider = .custom
+        }
+
+        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
+        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
+        refreshContainers()
+    }
+
+    private func selectASRProvider(_ option: ASRProviderOption) {
+        selectedASRProvider = option
+        switch option {
+        case .appleLocal:
+            store.preferences.asrEngineMode = .appleOnDevice
+            store.preferences.asrModelName = "apple-speech"
+        case .whisperLocal:
+            store.preferences.asrEngineMode = .localWhisper
+            store.preferences.asrModelName = "ggml-large-v3-turbo-q5_0.bin"
+        case .siliconFlow, .groq, .openAI:
+            store.preferences.asrEngineMode = .openAICompatible
+            store.preferences.asrBaseURL = option.defaultBaseURL
+            store.preferences.asrModelName = option.defaultModelName
+        case .custom:
+            store.preferences.asrEngineMode = .openAICompatible
+        }
+        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
+        autoSaveKeys()
+    }
+
+    private func selectLLMProvider(_ option: LLMProviderOption) {
+        selectedLLMProvider = option
+        if option != .custom {
+            store.preferences.llmBaseURL = option.defaultBaseURL
+            store.preferences.llmModelName = option.defaultModelName
+        }
+        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
+        autoSaveKeys()
+    }
+
+    private func testASRConnection() {
+        if selectedASRProvider == .appleLocal {
+            asrTestResult = (true, "Apple 语音识别：端侧系统组件已就绪，免网络连接")
+            return
+        }
+        if selectedASRProvider == .whisperLocal {
+            asrTestResult = localWhisperReady
+                ? (true, "Whisper 本机模型已就绪")
+                : (false, "本地 Whisper 模型未检测到，请先下载模型文件")
+            return
+        }
+        let key = asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            asrTestResult = (false, "请先填入或粘贴 API Key")
+            return
+        }
+        isTestingASR = true
+        asrTestResult = nil
+        Task {
+            do {
+                guard let url = URL(string: store.preferences.asrBaseURL)?
+                    .appendingPathComponent("models") else {
+                    await MainActor.run {
+                        self.isTestingASR = false
+                        self.asrTestResult = (false, "无效的 Base URL")
+                    }
+                    return
+                }
+                var req = URLRequest(url: url)
+                req.httpMethod = "GET"
+                req.timeoutInterval = 10
+                req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                let (data, response) = try await URLSession.shared.data(for: req)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                await MainActor.run {
+                    self.isTestingASR = false
+                    if (200..<300).contains(code) {
+                        self.asrTestResult = (true, "ASR 接口校验通过，连接正常！")
+                    } else {
+                        let errStr = String(data: data, encoding: .utf8) ?? ""
+                        self.asrTestResult = (false, "返回异常 (HTTP \(code))：\(errStr.prefix(80))")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isTestingASR = false
+                    self.asrTestResult = (false, "网络连接失败：\(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func testLLMConnection() {
+        if selectedLLMProvider == .localRules {
+            llmTestResult = (true, "本地规则引擎：内置离线规则已就绪，免网络")
+            return
+        }
+        let effectiveKey = (selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow && shareSiliconFlowKey)
+            ? asrAPIKeyInput : llmAPIKeyInput
+        let key = effectiveKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            llmTestResult = (false, "请先填入或粘贴 API Key")
+            return
+        }
+        isTestingLLM = true
+        llmTestResult = nil
+        Task {
+            do {
+                guard let url = URL(string: store.preferences.llmBaseURL)?
+                    .appendingPathComponent("models") else {
+                    await MainActor.run {
+                        self.isTestingLLM = false
+                        self.llmTestResult = (false, "无效的 Base URL")
+                    }
+                    return
+                }
+                var req = URLRequest(url: url)
+                req.httpMethod = "GET"
+                req.timeoutInterval = 10
+                req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                let (data, response) = try await URLSession.shared.data(for: req)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                await MainActor.run {
+                    self.isTestingLLM = false
+                    if (200..<300).contains(code) {
+                        self.llmTestResult = (true, "LLM 接口校验通过，模型服务正常！")
+                    } else {
+                        let errStr = String(data: data, encoding: .utf8) ?? ""
+                        self.llmTestResult = (false, "返回异常 (HTTP \(code))：\(errStr.prefix(80))")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isTestingLLM = false
+                    self.llmTestResult = (false, "网络连接失败：\(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private var localWhisperReady: Bool {
+        #if os(macOS)
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MemoFlow/models")
+        let modelPath = directory.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path
+        return FileManager.default.fileExists(atPath: modelPath)
+        #else
+        return false
+        #endif
+    }
+
+    private func refreshContainers() {
+        writableCalendars = EventKitIntegrationService.shared.writableCalendars()
+        writableReminderLists = EventKitIntegrationService.shared.writableReminderLists()
+    }
+
+    // MARK: - Dynamic Model Lists & Sync
+
+    private var combinedASRModels: [(id: String, label: String)] {
+        var result = selectedASRProvider.presetModels
+        let existingIds = Set(result.map(\.id))
+        for customId in store.preferences.customASRModels where !existingIds.contains(customId) {
+            result.append((id: customId, label: "\(customId)（已同步/自定义模型）"))
+        }
+        return result
+    }
+
+    private var combinedLLMModels: [(id: String, label: String)] {
+        var result = selectedLLMProvider.presetModels
+        let existingIds = Set(result.map(\.id))
+        for customId in store.preferences.customLLMModels where !existingIds.contains(customId) {
+            result.append((id: customId, label: "\(customId)（已同步/自定义模型）"))
+        }
+        return result
+    }
+
+    private var currentASRModelLabel: String {
+        if let match = combinedASRModels.first(where: { $0.id == store.preferences.asrModelName }) {
+            return match.label
+        }
+        return store.preferences.asrModelName.isEmpty ? "未选择识别模型" : store.preferences.asrModelName
+    }
+
+    private var currentLLMModelLabel: String {
+        if let match = combinedLLMModels.first(where: { $0.id == store.preferences.llmModelName }) {
+            return match.label
+        }
+        return store.preferences.llmModelName.isEmpty ? "未选择整理模型" : store.preferences.llmModelName
+    }
+
+    private func addCustomASRModel() {
+        let trimmed = newASRModelIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !store.preferences.customASRModels.contains(trimmed) {
+            store.preferences.customASRModels.insert(trimmed, at: 0)
+        }
+        store.preferences.asrModelName = trimmed
+        newASRModelIdInput = ""
+        showingAddASRModelField = false
+        autoSaveKeys()
+    }
+
+    private func addCustomLLMModel() {
+        let trimmed = newLLMModelIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !store.preferences.customLLMModels.contains(trimmed) {
+            store.preferences.customLLMModels.insert(trimmed, at: 0)
+        }
+        store.preferences.llmModelName = trimmed
+        newLLMModelIdInput = ""
+        showingAddLLMModelField = false
+        autoSaveKeys()
+    }
+
+    @MainActor
+    private func syncRemoteASRModels() async {
+        isSyncingASRModels = true
+        asrSyncStatusMessage = nil
+        defer { isSyncingASRModels = false }
+
+        do {
+            let fetched = try await ASRAndLLMService.shared.fetchRemoteModels(
+                baseURL: store.preferences.asrBaseURL,
+                apiKey: asrAPIKeyInput,
+                category: .asr
+            )
+            let presetIds = Set(selectedASRProvider.presetModels.map(\.id))
+            var addedCount = 0
+            for id in fetched where !presetIds.contains(id) && !store.preferences.customASRModels.contains(id) {
+                store.preferences.customASRModels.append(id)
+                addedCount += 1
+            }
+            store.saveToDisk()
+            asrSyncStatusMessage = addedCount > 0
+                ? "已从服务端拉取并新增 \(addedCount) 个语音模型。"
+                : "已与服务端同步（共检测到 \(fetched.count) 个语音模型，当前列表已是最新）。"
+        } catch {
+            asrSyncStatusMessage = "拉取失败：\(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func syncRemoteLLMModels(effectiveKey: String) async {
+        isSyncingLLMModels = true
+        llmSyncStatusMessage = nil
+        defer { isSyncingLLMModels = false }
+
+        do {
+            let fetched = try await ASRAndLLMService.shared.fetchRemoteModels(
+                baseURL: store.preferences.llmBaseURL,
+                apiKey: effectiveKey,
+                category: .llm
+            )
+            let presetIds = Set(selectedLLMProvider.presetModels.map(\.id))
+            var addedCount = 0
+            for id in fetched where !presetIds.contains(id) && !store.preferences.customLLMModels.contains(id) {
+                store.preferences.customLLMModels.append(id)
+                addedCount += 1
+            }
+            store.saveToDisk()
+            llmSyncStatusMessage = addedCount > 0
+                ? "已从服务端拉取并新增 \(addedCount) 个模型。"
+                : "已与服务端同步（共检测到 \(fetched.count) 个可用模型，当前列表已是最新）。"
+        } catch {
+            llmSyncStatusMessage = "拉取失败：\(error.localizedDescription)"
+        }
     }
 
     // MARK: - Reusable UI Components
+
+    private func statusPill(isReady: Bool, readyText: String, emptyText: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(isReady ? MFTheme.mintGreen : MFTheme.warmAmber)
+                .frame(width: 6, height: 6)
+            Text(isReady ? readyText : emptyText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(isReady ? MFTheme.mintGreen : MFTheme.warmAmber)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(isReady ? MFTheme.mintGreen.opacity(0.12) : MFTheme.warmAmber.opacity(0.12))
+        )
+    }
 
     private func providerOptionTile(
         title: String,
@@ -1403,34 +2074,33 @@ public struct SettingsView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Image(systemName: icon)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isSelected ? MFTheme.iceCyan : MFTheme.textSecondary)
                     Spacer()
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.caption)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.4))
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(MFTheme.iceCyan)
+                    }
                 }
-
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textPrimary)
                 Text(badge)
-                    .font(.caption2)
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .font(.system(size: 9))
+                    .foregroundStyle(MFTheme.textSecondary)
                     .lineLimit(1)
             }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? Color.accentColor.opacity(0.1) : Color.secondary.opacity(0.06))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.white.opacity(0.04))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(isSelected ? MFTheme.iceCyan : Color.clear, lineWidth: 1.5)
                     )
             )
         }
@@ -1516,37 +2186,6 @@ public struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
-    private func modelRadioRow(
-        title: String,
-        subtitle: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(subtitle)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
     private func apiKeyInputRow(
         title: String,
         placeholder: String,
@@ -1557,6 +2196,7 @@ public struct SettingsView: View {
             HStack {
                 Text(title)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(MFTheme.textSecondary)
                 Spacer()
                 if !text.wrappedValue.isEmpty {
                     Button("清空") {
@@ -1564,166 +2204,58 @@ public struct SettingsView: View {
                         autoSaveKeys()
                     }
                     .font(.caption2)
-                    .foregroundStyle(.red)
-                    .buttonStyle(.plain)
+                    .foregroundStyle(MFTheme.textMuted)
                 }
             }
 
             HStack(spacing: 8) {
-                Group {
-                    if isPlainVisible.wrappedValue {
-                        TextField(placeholder, text: text)
-                    } else {
-                        SecureField(placeholder, text: text)
-                    }
-                }
-                .textFieldStyle(.plain)
-                .font(.caption.monospaced())
-                .onChange(of: text.wrappedValue) { _, _ in
-                    autoSaveKeys()
+                if isPlainVisible.wrappedValue {
+                    TextField(placeholder, text: text)
+                        .textFieldStyle(.plain)
+                        .font(.caption.monospaced())
+                } else {
+                    SecureField(placeholder, text: text)
+                        .textFieldStyle(.plain)
+                        .font(.caption.monospaced())
                 }
 
                 Button {
                     isPlainVisible.wrappedValue.toggle()
                 } label: {
-                    Image(systemName: isPlainVisible.wrappedValue ? "eye.slash" : "eye")
+                    Image(systemName: isPlainVisible.wrappedValue ? "eye.slash.fill" : "eye.fill")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(MFTheme.textMuted)
                 }
                 .buttonStyle(.plain)
 
                 Button {
-                    if let clip = readClipboardString(), !clip.isEmpty {
+                    if let clip = getClipboardString() {
                         text.wrappedValue = clip.trimmingCharacters(in: .whitespacesAndNewlines)
                         autoSaveKeys()
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.on.clipboard")
-                        Text("粘贴")
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
-                    .foregroundStyle(Color.accentColor)
+                    Text("粘贴")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(MFTheme.iceCyan.opacity(0.12), in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-        }
-    }
-
-    private func statusPill(isReady: Bool, readyText: String, emptyText: String) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(isReady ? Color.green : Color.orange)
-                .frame(width: 6, height: 6)
-            Text(isReady ? readyText : emptyText)
-                .font(.caption2.weight(.semibold))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background((isReady ? Color.green : Color.orange).opacity(0.14), in: Capsule())
-        .foregroundStyle(isReady ? Color.green : Color.orange)
-    }
-
-    // MARK: - Selection Logic & Persistence
-
-    private func selectASRProvider(_ option: ASRProviderOption) {
-        guard option != selectedASRProvider else { return }
-        selectedASRProvider = option
-        if option == .appleLocal {
-            store.preferences.asrEngineMode = .appleOnDevice
-        } else if option == .whisperLocal {
-            store.preferences.asrEngineMode = .localWhisper
-            store.preferences.asrModelName = "ggml-large-v3-turbo-q5_0.bin"
-        } else {
-            store.preferences.asrEngineMode = .openAICompatible
-            if !option.baseURL.isEmpty {
-                store.preferences.asrBaseURL = option.baseURL
-            }
-            if let firstModel = option.presetModels.first?.id {
-                store.preferences.asrModelName = firstModel
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+            )
+            .onChange(of: text.wrappedValue) { _, _ in
+                autoSaveKeys()
             }
         }
-        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
-        autoSaveKeys()
     }
 
-    private func selectLLMProvider(_ option: LLMProviderOption) {
-        guard option != selectedLLMProvider else { return }
-        selectedLLMProvider = option
-        if option == .localRules {
-            llmAPIKeyInput = ""
-            store.preferences.llmBaseURL = ""
-            store.preferences.llmModelName = "local-heuristic"
-        } else {
-            if !option.baseURL.isEmpty {
-                store.preferences.llmBaseURL = option.baseURL
-            }
-            if let firstModel = option.presetModels.first?.id {
-                store.preferences.llmModelName = firstModel
-            } else {
-                store.preferences.llmModelName = ""
-            }
-        }
-        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
-        autoSaveKeys()
-    }
-
-    private func loadCurrentSelectionState() {
-        asrAPIKeyInput = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: store.preferences.asrBaseURL) ?? ""
-        llmAPIKeyInput = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
-
-        if store.preferences.asrEngineMode == .appleOnDevice {
-            selectedASRProvider = .appleLocal
-        } else if store.preferences.asrEngineMode == .localWhisper {
-            selectedASRProvider = .whisperLocal
-        } else if store.preferences.asrBaseURL.contains("siliconflow") {
-            selectedASRProvider = .siliconFlow
-        } else if store.preferences.asrBaseURL.contains("groq") {
-            selectedASRProvider = .groq
-        } else if store.preferences.asrBaseURL.contains("openai.com") {
-            selectedASRProvider = .openAI
-        } else {
-            selectedASRProvider = .custom
-        }
-
-        selectedLLMProvider = store.preferences.llmModelName == "local-heuristic" ? .localRules :
-            (LLMProviderOption.allCases.first { !$0.baseURL.isEmpty && $0.baseURL == store.preferences.llmBaseURL } ?? .custom)
-
-        refreshContainers()
-    }
-
-    private func autoSaveKeys() {
-        let asrSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .asrAPIKey, endpoint: store.preferences.asrBaseURL)
-        let llmSaved: Bool
-        if selectedASRProvider == .siliconFlow && selectedLLMProvider == .siliconFlow && shareSiliconFlowKey {
-            llmSaved = KeychainService.shared.saveKey(asrAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
-        } else if selectedLLMProvider == .localRules {
-            llmSaved = true
-        } else {
-            llmSaved = KeychainService.shared.saveKey(llmAPIKeyInput, for: .llmAPIKey, endpoint: store.preferences.llmBaseURL)
-        }
-        guard asrSaved && llmSaved else {
-            store.lastBannerFeedback = "API Key 保存失败，请检查系统钥匙串权限后重试。"
-            return
-        }
-        store.saveToDisk()
-        withAnimation {
-            savedToastVisible = true
-        }
-    }
-
-    private func saveAllAndDismiss() {
-        autoSaveKeys()
-        dismiss()
-    }
-
-    private func readClipboardString() -> String? {
+    private func getClipboardString() -> String? {
         #if os(iOS)
         return UIPasteboard.general.string
         #elseif os(macOS)
@@ -1732,126 +2264,9 @@ public struct SettingsView: View {
         return nil
         #endif
     }
-
-    private func refreshContainers() {
-        writableCalendars = EventKitIntegrationService.shared.writableCalendars()
-        writableReminderLists = EventKitIntegrationService.shared.writableReminderLists()
-    }
-
-    // MARK: - Dynamic Model List Merging & /v1/models Live Sync
-
-    private var combinedASRModels: [(id: String, label: String)] {
-        var result = selectedASRProvider.presetModels
-        let existingIds = Set(result.map(\.id))
-        for customId in store.preferences.customASRModels where !existingIds.contains(customId) {
-            result.append((id: customId, label: "\(customId)（已同步/自定义模型）"))
-        }
-        return result
-    }
-
-    private var combinedLLMModels: [(id: String, label: String)] {
-        var result = selectedLLMProvider.presetModels
-        let existingIds = Set(result.map(\.id))
-        for customId in store.preferences.customLLMModels where !existingIds.contains(customId) {
-            result.append((id: customId, label: "\(customId)（已同步/自定义模型）"))
-        }
-        return result
-    }
-
-    private var currentASRModelLabel: String {
-        if let match = combinedASRModels.first(where: { $0.id == store.preferences.asrModelName }) {
-            return match.label
-        }
-        return store.preferences.asrModelName.isEmpty ? "未选择识别模型" : store.preferences.asrModelName
-    }
-
-    private var currentLLMModelLabel: String {
-        if let match = combinedLLMModels.first(where: { $0.id == store.preferences.llmModelName }) {
-            return match.label
-        }
-        return store.preferences.llmModelName.isEmpty ? "未选择整理模型" : store.preferences.llmModelName
-    }
-
-    private func addCustomASRModel() {
-        let trimmed = newASRModelIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if !store.preferences.customASRModels.contains(trimmed) {
-            store.preferences.customASRModels.insert(trimmed, at: 0)
-        }
-        store.preferences.asrModelName = trimmed
-        newASRModelIdInput = ""
-        showingAddASRModelField = false
-        autoSaveKeys()
-    }
-
-    private func addCustomLLMModel() {
-        let trimmed = newLLMModelIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if !store.preferences.customLLMModels.contains(trimmed) {
-            store.preferences.customLLMModels.insert(trimmed, at: 0)
-        }
-        store.preferences.llmModelName = trimmed
-        newLLMModelIdInput = ""
-        showingAddLLMModelField = false
-        autoSaveKeys()
-    }
-
-    @MainActor
-    private func syncRemoteASRModels() async {
-        isSyncingASRModels = true
-        asrSyncStatusMessage = nil
-        defer { isSyncingASRModels = false }
-
-        do {
-            let fetched = try await ASRAndLLMService.shared.fetchRemoteModels(
-                baseURL: store.preferences.asrBaseURL,
-                apiKey: asrAPIKeyInput,
-                category: .asr
-            )
-            let presetIds = Set(selectedASRProvider.presetModels.map(\.id))
-            var addedCount = 0
-            for id in fetched where !presetIds.contains(id) && !store.preferences.customASRModels.contains(id) {
-                store.preferences.customASRModels.append(id)
-                addedCount += 1
-            }
-            store.saveToDisk()
-            asrSyncStatusMessage = addedCount > 0
-                ? "已从服务端拉取并新增 \(addedCount) 个语音模型，直接点击下方单选框即可切换。"
-                : "已与服务端同步（共检测到 \(fetched.count) 个语音模型，当前列表已是最新）。"
-        } catch {
-            asrSyncStatusMessage = "拉取失败：\(error.localizedDescription)"
-        }
-    }
-
-    @MainActor
-    private func syncRemoteLLMModels(effectiveKey: String) async {
-        isSyncingLLMModels = true
-        llmSyncStatusMessage = nil
-        defer { isSyncingLLMModels = false }
-
-        do {
-            let fetched = try await ASRAndLLMService.shared.fetchRemoteModels(
-                baseURL: store.preferences.llmBaseURL,
-                apiKey: effectiveKey,
-                category: .llm
-            )
-            let presetIds = Set(selectedLLMProvider.presetModels.map(\.id))
-            var addedCount = 0
-            for id in fetched where !presetIds.contains(id) && !store.preferences.customLLMModels.contains(id) {
-                store.preferences.customLLMModels.append(id)
-                addedCount += 1
-            }
-            store.saveToDisk()
-            llmSyncStatusMessage = addedCount > 0
-                ? "已从服务端拉取并新增 \(addedCount) 个模型，直接点击下方单选框即可切换。"
-                : "已与服务端同步（共检测到 \(fetched.count) 个可用模型，当前列表已是最新）。"
-        } catch {
-            llmSyncStatusMessage = "拉取失败：\(error.localizedDescription)"
-        }
-    }
 }
 
-// MARK: - Model Picker Modal Sheet (点击弹窗列表选择，带即时搜索、推荐分类与一键切换)
+// MARK: - Model Picker Modal Sheet
 
 private struct ModelPickerModalView: View {
     let title: String
@@ -1894,7 +2309,6 @@ private struct ModelPickerModalView: View {
                 MFTheme.sheetBg.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // 快速搜索栏（当模型数量大于 2 时显示）
                     if models.count > 2 {
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass")
@@ -1929,7 +2343,6 @@ private struct ModelPickerModalView: View {
                                     .padding(.horizontal, 16)
                             }
 
-                            // 1. 官方推荐与预置模型
                             if !presetFiltered.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
@@ -1956,7 +2369,6 @@ private struct ModelPickerModalView: View {
                                 }
                             }
 
-                            // 2. 从服务端拉取或自定义添加的模型
                             if !customFiltered.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
@@ -1996,7 +2408,6 @@ private struct ModelPickerModalView: View {
                                 .padding(.vertical, 36)
                             }
 
-                            // 3. 服务端动态拉取与手动输入新模型
                             if allowsSync {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Divider().background(Color.white.opacity(0.1))

@@ -111,7 +111,7 @@ public final class MemoFlowStore: ObservableObject {
     }
 
     public let audioService: AudioRecorderAndPlayerService
-    private let persistenceURL: URL
+    public let persistenceURL: URL
 
     public init(
         audioService: AudioRecorderAndPlayerService? = nil,

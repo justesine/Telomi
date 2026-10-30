@@ -149,12 +149,10 @@ public struct HomeView: View {
                 #endif
             }
             .sheet(isPresented: $showingSettings) {
-                NavigationStack {
-                    SettingsView(store: store)
-                }
-                #if os(macOS)
-                .frame(minWidth: 520, idealWidth: 560, minHeight: 680, idealHeight: 740)
-                #endif
+                SettingsView(store: store)
+                    #if os(macOS)
+                    .frame(minWidth: 720, idealWidth: 800, minHeight: 580, idealHeight: 660)
+                    #endif
             }
             .sheet(isPresented: $showingGroundedQA) {
                 NavigationStack {
@@ -299,26 +297,21 @@ public struct HomeView: View {
             Button {
                 showingSettings = true
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(MFTheme.iceCyan)
-                    Text("服务与设置")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MFTheme.textPrimary)
-                }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(MFTheme.cardSurfaceGradient)
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
-                        )
-                )
+                Image(systemName: "gearshape")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(MFTheme.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Circle()
+                            .fill(MFTheme.cardSurfaceGradient)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                            )
+                    )
             }
             .buttonStyle(.plain)
+            .help("服务与设置")
         }
     }
 
