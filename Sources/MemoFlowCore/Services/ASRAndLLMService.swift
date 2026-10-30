@@ -78,6 +78,17 @@ public enum AudioSourceValidation {
               }) else {
             throw ProcessingPipelineError.audioProcessingFailed("逐字稿来源或时间戳校验失败，未替换原稿")
         }
+        if recording.duration >= 600 {
+            let ordered = segments.sorted { $0.startMs < $1.startMs }
+            let gaps = zip(ordered, ordered.dropFirst()).map { max(0, $1.startMs - $0.endMs) }
+            let largestGap = Double(gaps.max() ?? 0) / 1000
+            let characterCount = ordered.reduce(0) { $0 + $1.text.count }
+            if largestGap > max(120, recording.duration * 0.2) &&
+                Double(characterCount) < recording.duration / 20 {
+                throw ProcessingPipelineError.audioProcessingFailed(
+                    "逐字稿仅有 \(characterCount) 字且存在 \(Int(largestGap)) 秒未覆盖，疑似漏转；未替换原稿")
+            }
+        }
     }
 }
 
@@ -134,6 +145,15 @@ public final class ASRAndLLMService: Sendable {
         return stride(from: 0.0, to: duration, by: 45.0).map { $0..<min(duration, $0 + 45) }
     }
 
+    /// A failed 45-second Speech request is retried as shorter, contiguous requests.
+    /// These ranges are only a retry plan; no failed range is silently discarded.
+    static func appleSpeechRetryRanges(duration: Double) throws -> [Range<Double>] {
+        guard duration.isFinite, duration > 0, duration <= 45 else {
+            throw ProcessingPipelineError.audioProcessingFailed("语音重试切片时长无效")
+        }
+        return stride(from: 0.0, to: duration, by: 15.0).map { $0..<min(duration, $0 + 15) }
+    }
+
     // MARK: - Stage ③: ASR Transcription (OpenAI-Compatible + Apple On-Device)
 
     public func transcribeAudio(
@@ -157,6 +177,12 @@ public final class ASRAndLLMService: Sendable {
         switch preferences.asrEngineMode {
         case .appleOnDevice:
             return try await transcribeWithAppleSpeech(fileURL: fileURL, recording: source, preferences: preferences)
+        case .localWhisper:
+            #if os(macOS)
+            return try await transcribeWithLocalWhisper(fileURL: fileURL, recording: source)
+            #else
+            throw ProcessingPipelineError.audioProcessingFailed("本机 Whisper 当前仅支持 Mac；iPhone 请使用 Apple Speech 或已授权的云端 ASR")
+            #endif
         case .openAICompatible:
             let key = (apiKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else {
@@ -554,6 +580,81 @@ public final class ASRAndLLMService: Sendable {
         }
     }
 
+    private func recognizeAppleSpeechSegments(
+        url: URL,
+        recognizer: SFSpeechRecognizer,
+        contextualStrings: [String],
+        recordingId: UUID,
+        start: Double,
+        duration: Double
+    ) async throws -> [TranscriptSegment] {
+        guard let result = try await recognizeSingleChunkWithAppleSpeech(
+            chunkURL: url,
+            recognizer: recognizer,
+            contextualStrings: contextualStrings,
+            timeoutSeconds: 75
+        ) else { throw ProcessingPipelineError.emptyTranscription }
+        let segments = parseSegments(from: result, recordingId: recordingId,
+            chunkBaseOffsetSec: start, chunkDuration: duration)
+        guard !segments.isEmpty else { throw ProcessingPipelineError.emptyTranscription }
+        return segments
+    }
+
+    /// Apple Speech can report "No speech detected" for a quiet but spoken
+    /// interval. Retry the original compressed audio without contextual hints,
+    /// then use 15-second slices. Every slice must complete before we publish.
+    private func transcribeAppleSpeechChunkWithRetries(
+        chunkURL: URL,
+        normalizedURL: URL,
+        tempDirectory: URL,
+        recognizer: SFSpeechRecognizer,
+        contextualStrings: [String],
+        recordingId: UUID,
+        start: Double,
+        duration: Double
+    ) async throws -> [TranscriptSegment] {
+        do {
+            return try await recognizeAppleSpeechSegments(url: normalizedURL,
+                recognizer: recognizer, contextualStrings: contextualStrings,
+                recordingId: recordingId, start: start, duration: duration)
+        } catch is CancellationError { throw CancellationError() }
+        catch { /* Retry the untouched slice. */ }
+
+        do {
+            return try await recognizeAppleSpeechSegments(url: chunkURL,
+                recognizer: recognizer, contextualStrings: [],
+                recordingId: recordingId, start: start, duration: duration)
+        } catch is CancellationError { throw CancellationError() }
+        catch { /* Retry shorter slices. */ }
+
+        var recovered: [TranscriptSegment] = []
+        for (index, range) in try Self.appleSpeechRetryRanges(duration: duration).enumerated() {
+            try Task.checkCancellation()
+            let subURL = tempDirectory.appendingPathComponent("retry_\(Int(start))_\(index).m4a")
+            let subNormURL = tempDirectory.appendingPathComponent("retry_\(Int(start))_\(index).wav")
+            defer {
+                try? FileManager.default.removeItem(at: subURL)
+                try? FileManager.default.removeItem(at: subNormURL)
+            }
+            try await sliceAudioFile(sourceURL: chunkURL, startTime: range.lowerBound,
+                duration: range.upperBound - range.lowerBound, destinationURL: subURL)
+            let preparedURL = (try? normalizeAudioChunkForASR(inputURL: subURL,
+                outputURL: subNormURL)) ?? subURL
+            do {
+                recovered += try await recognizeAppleSpeechSegments(url: preparedURL,
+                    recognizer: recognizer, contextualStrings: [], recordingId: recordingId,
+                    start: start + range.lowerBound, duration: range.upperBound - range.lowerBound)
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                // A successful neighboring slice cannot prove this one was silent.
+                // Keep the previous transcript and surface the exact missing time.
+                throw ProcessingPipelineError.audioProcessingFailed(
+                    "\(TimeFormatting.formatDuration(start + range.lowerBound)) 起的 15 秒重试仍未识别：\(error.localizedDescription)")
+            }
+        }
+        return recovered
+    }
+
     /// 从单个切片的识别结果提取带真实时间戳的分段（解决 BUG-002 伪时间戳拉伸与跨静音粘连）
     private func parseSegments(
         from result: SFSpeechRecognitionResult,
@@ -699,20 +800,12 @@ public final class ASRAndLLMService: Sendable {
                 // 方案二优化：端侧分块动态响度均衡与弱音增益补偿
                 let targetRecognitionURL = (try? normalizeAudioChunkForASR(inputURL: chunkURL, outputURL: normURL)) ?? chunkURL
 
-                if let result = try await recognizeSingleChunkWithAppleSpeech(
-                    chunkURL: targetRecognitionURL,
-                    recognizer: recognizer,
-                    contextualStrings: contextualStrings,
-                    timeoutSeconds: 75.0
-                ) {
-                    let segs = parseSegments(
-                        from: result,
-                        recordingId: recording.id,
-                        chunkBaseOffsetSec: chunkStart,
-                        chunkDuration: chunkDuration
-                    )
-                    allSegments.append(contentsOf: segs)
-                }
+                let segs = try await transcribeAppleSpeechChunkWithRetries(
+                    chunkURL: chunkURL, normalizedURL: targetRecognitionURL,
+                    tempDirectory: tempDir, recognizer: recognizer,
+                    contextualStrings: contextualStrings, recordingId: recording.id,
+                    start: chunkStart, duration: chunkDuration)
+                allSegments.append(contentsOf: segs)
             } catch {
                 if error is CancellationError { throw error }
                 throw ProcessingPipelineError.audioProcessingFailed("第 \(i + 1)/\(numChunks) 段（\(TimeFormatting.formatDuration(chunkStart))）未完成：\(error.localizedDescription)。未替换原逐字稿")
@@ -734,6 +827,83 @@ public final class ASRAndLLMService: Sendable {
 
         return allSegments
     }
+
+    static func parseWhisperTranscriptData(_ data: Data, recording: Recording) throws -> [TranscriptSegment] {
+        // whisper.cpp can occasionally emit one invalid UTF-8 byte in a token.
+        // Preserve the replacement character instead of losing the whole recording.
+        let repaired = Data(String(decoding: data, as: UTF8.self).utf8)
+        guard let root = try JSONSerialization.jsonObject(with: repaired) as? [String: Any],
+              let rows = root["transcription"] as? [[String: Any]] else {
+            throw ProcessingPipelineError.audioProcessingFailed("本机 Whisper 未返回有效逐字稿")
+        }
+        let maximumMs = Int(ceil(recording.duration * 1000))
+        var segments: [TranscriptSegment] = []
+        for row in rows {
+            guard let offsets = row["offsets"] as? [String: Int],
+                  let start = offsets["from"], let rawEnd = offsets["to"],
+                  let text = (row["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { continue }
+            let end = min(rawEnd, maximumMs)
+            guard start >= 0, start < end, start < maximumMs else { continue }
+            segments.append(TranscriptSegment(id: String(format: "whisper_%05d", segments.count + 1),
+                recordingId: recording.id, startMs: start, endMs: end, text: text))
+        }
+        try AudioSourceValidation.validateSegments(segments, recording: recording)
+        return segments
+    }
+
+    #if os(macOS)
+    private func transcribeWithLocalWhisper(fileURL: URL, recording: Recording) async throws -> [TranscriptSegment] {
+        let modelDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MemoFlow/Models")
+        let model = modelDirectory.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin")
+        let vadModel = modelDirectory.appendingPathComponent("ggml-silero-v6.2.0.bin")
+        let whisper = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let whisper, let ffmpeg,
+              FileManager.default.fileExists(atPath: model.path),
+              FileManager.default.fileExists(atPath: vadModel.path) else {
+            throw ProcessingPipelineError.audioProcessingFailed(
+                "本机 Whisper 组件尚未安装，请在设置中检查模型与命令行工具；原录音和旧稿未改动")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mf_whisper_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let wav = directory.appendingPathComponent("audio.wav")
+        let output = directory.appendingPathComponent("transcript")
+        try Task.checkCancellation()
+        try Self.runLocalASRTool(ffmpeg, arguments: ["-hide_banner", "-loglevel", "error", "-y",
+            "-i", fileURL.path, "-af", "highpass=f=100,lowpass=f=7000,afftdn=nr=12,dynaudnorm=f=150:g=15",
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav.path], logURL: directory.appendingPathComponent("ffmpeg.log"))
+        try Task.checkCancellation()
+        try Self.runLocalASRTool(whisper, arguments: ["-m", model.path, "-f", wav.path,
+            "--vad", "-vm", vadModel.path, "-l", "auto", "-mc", "0", "-t", "8",
+            "-oj", "-of", output.path, "-np"], logURL: directory.appendingPathComponent("whisper.log"))
+        try Task.checkCancellation()
+        let data = try Data(contentsOf: output.appendingPathExtension("json"))
+        return try Self.parseWhisperTranscriptData(data, recording: recording)
+    }
+
+    private static func runLocalASRTool(_ path: String, arguments: [String], logURL: URL) throws {
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let log = try FileHandle(forWritingTo: logURL)
+        defer { try? log.close() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        process.standardOutput = log
+        process.standardError = log
+        do { try process.run() }
+        catch { throw ProcessingPipelineError.audioProcessingFailed("无法启动本机识别工具：\(error.localizedDescription)") }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let detail = (try? String(contentsOf: logURL, encoding: .utf8).suffix(300)) ?? "退出码 \(process.terminationStatus)"
+            throw ProcessingPipelineError.audioProcessingFailed("本机识别失败：\(detail)")
+        }
+    }
+    #endif
 
     // MARK: - Stage ④: LLM Note Organization & Evidence-Backed Action Extraction (PRD 06)
 

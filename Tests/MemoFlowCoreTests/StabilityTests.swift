@@ -17,6 +17,37 @@ final class StabilityTests: XCTestCase {
         XCTAssertThrowsError(try ASRAndLLMService.chunkRanges(duration: .infinity))
     }
 
+    func testAppleSpeechRetryRangesCoverEverySecond() throws {
+        let ranges = try ASRAndLLMService.appleSpeechRetryRanges(duration: 45)
+        XCTAssertEqual(ranges, [0..<15, 15..<30, 30..<45])
+        let tail = try ASRAndLLMService.appleSpeechRetryRanges(duration: 14.676)
+        XCTAssertEqual(tail, [0..<14.676])
+        XCTAssertThrowsError(try ASRAndLLMService.appleSpeechRetryRanges(duration: 46))
+    }
+
+    func testSparseLongTranscriptCannotBeMarkedComplete() throws {
+        let recording = Recording(title: "长录音", duration: 2949.676, localAudioFileName: "source.m4a")
+        let first = TranscriptSegment(recordingId: recording.id, startMs: 64000, endMs: 70000, text: "录音开始")
+        let last = TranscriptSegment(recordingId: recording.id, startMs: 2800000, endMs: 2805000, text: "录音结束")
+        XCTAssertThrowsError(try AudioSourceValidation.validateSegments([first, last], recording: recording))
+        let middle = TranscriptSegment(recordingId: recording.id, startMs: 1400000, endMs: 1405000,
+            text: String(repeating: "会议内容。", count: 100))
+        XCTAssertNoThrow(try AudioSourceValidation.validateSegments([first, middle, last], recording: recording))
+    }
+
+    func testLocalWhisperParserRejectsZeroLengthAndClampsTail() throws {
+        let recording = Recording(title: "识别", duration: 2, localAudioFileName: "source.wav")
+        let data = Data(#"{"transcription":[{"offsets":{"from":0,"to":0},"text":"伪句"},{"offsets":{"from":500,"to":2500},"text":"实际语音"}]}"#.utf8)
+        let segments = try ASRAndLLMService.parseWhisperTranscriptData(data, recording: recording)
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments[0].startMs, 500)
+        XCTAssertEqual(segments[0].endMs, 2000)
+        XCTAssertEqual(segments[0].text, "实际语音")
+        XCTAssertThrowsError(try ASRAndLLMService.parseWhisperTranscriptData(Data("{}".utf8), recording: recording))
+        XCTAssertFalse(ASREngineMode.localWhisper.sendsAudioToCloud)
+        XCTAssertTrue(ASREngineMode.openAICompatible.sendsAudioToCloud)
+    }
+
     func testEndpointAndCredentialIsolation() throws {
         let keys = KeychainService()
         XCTAssertNotEqual(keys.credentialAccount(.llmAPIKey, endpoint: "https://api.deepseek.com/v1"),

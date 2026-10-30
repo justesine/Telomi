@@ -15,6 +15,7 @@ import MemoFlowCore
 
 public enum ASRProviderOption: String, CaseIterable, Identifiable {
     case appleLocal = "apple_local"
+    case whisperLocal = "whisper_local"
     case siliconFlow = "siliconflow"
     case groq = "groq"
     case openAI = "openai"
@@ -22,9 +23,18 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
+    public static var availableCases: [ASRProviderOption] {
+        #if os(macOS)
+        return allCases
+        #else
+        return allCases.filter { $0 != .whisperLocal }
+        #endif
+    }
+
     public var title: String {
         switch self {
         case .appleLocal: return "Apple 端侧识别"
+        case .whisperLocal: return "本机 Whisper"
         case .siliconFlow: return "硅基流动"
         case .groq: return "Groq 极速"
         case .openAI: return "OpenAI"
@@ -35,6 +45,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
     public var badge: String {
         switch self {
         case .appleLocal: return "免 Key · 本地"
+        case .whisperLocal: return "长录音 · 待校对"
         case .siliconFlow: return "中文首选 · 免费额度"
         case .groq: return "超快 Whisper"
         case .openAI: return "官方标准"
@@ -45,6 +56,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
     public var iconName: String {
         switch self {
         case .appleLocal: return "iphone.gen3"
+        case .whisperLocal: return "waveform.badge.mic"
         case .siliconFlow: return "sparkles"
         case .groq: return "bolt.fill"
         case .openAI: return "waveform.circle.fill"
@@ -55,6 +67,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
     public var baseURL: String {
         switch self {
         case .appleLocal: return ""
+        case .whisperLocal: return ""
         case .siliconFlow: return "https://api.siliconflow.cn/v1"
         case .groq: return "https://api.groq.com/openai/v1"
         case .openAI: return "https://api.openai.com/v1"
@@ -66,6 +79,8 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
         switch self {
         case .appleLocal:
             return [("apple-speech", "系统内置 SFSpeechRecognizer（中文/多语种）")]
+        case .whisperLocal:
+            return [("ggml-large-v3-turbo-q5_0.bin", "Whisper Large v3 Turbo（本机模型，需回听校对）")]
         case .siliconFlow:
             return [
                 ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 中英混杂极快）"),
@@ -88,7 +103,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
     }
 
     public var requiresAPIKey: Bool {
-        self != .appleLocal
+        self != .appleLocal && self != .whisperLocal
     }
 }
 
@@ -337,6 +352,21 @@ public struct SettingsView: View {
 
     // MARK: - 1. ASR Selection Card
 
+    private var localWhisperReady: Bool {
+        #if os(macOS)
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MemoFlow/Models")
+        let hasTools = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"]
+            .contains { FileManager.default.isExecutableFile(atPath: $0) } &&
+            ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .contains { FileManager.default.isExecutableFile(atPath: $0) }
+        return hasTools && FileManager.default.fileExists(atPath: directory.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path) &&
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("ggml-silero-v6.2.0.bin").path)
+        #else
+        return false
+        #endif
+    }
+
     private var asrSelectionCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -344,15 +374,17 @@ public struct SettingsView: View {
                     .font(.subheadline.weight(.bold))
                 Spacer()
                 statusPill(
-                    isReady: !selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    readyText: selectedASRProvider == .appleLocal ? "端侧免 Key 已就绪" : "已配置密钥",
-                    emptyText: "待粘贴 API Key"
+                    isReady: selectedASRProvider == .whisperLocal ? localWhisperReady :
+                        (!selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                    readyText: selectedASRProvider == .appleLocal ? "端侧免 Key 已就绪" :
+                        (selectedASRProvider == .whisperLocal ? "本机模型已就绪" : "已配置密钥"),
+                    emptyText: selectedASRProvider == .whisperLocal ? "需安装本机模型与工具" : "待粘贴 API Key"
                 )
             }
 
             // 服务商网格点选卡片
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 10)], spacing: 10) {
-                ForEach(ASRProviderOption.allCases) { option in
+                ForEach(ASRProviderOption.availableCases) { option in
                     providerOptionTile(
                         title: option.title,
                         badge: option.badge,
@@ -1209,6 +1241,9 @@ public struct SettingsView: View {
         selectedASRProvider = option
         if option == .appleLocal {
             store.preferences.asrEngineMode = .appleOnDevice
+        } else if option == .whisperLocal {
+            store.preferences.asrEngineMode = .localWhisper
+            store.preferences.asrModelName = "ggml-large-v3-turbo-q5_0.bin"
         } else {
             store.preferences.asrEngineMode = .openAICompatible
             if !option.baseURL.isEmpty {
@@ -1249,6 +1284,8 @@ public struct SettingsView: View {
 
         if store.preferences.asrEngineMode == .appleOnDevice {
             selectedASRProvider = .appleLocal
+        } else if store.preferences.asrEngineMode == .localWhisper {
+            selectedASRProvider = .whisperLocal
         } else if store.preferences.asrBaseURL.contains("siliconflow") {
             selectedASRProvider = .siliconFlow
         } else if store.preferences.asrBaseURL.contains("groq") {

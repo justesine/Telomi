@@ -199,7 +199,9 @@ public struct HomeView: View {
                         .frame(width: 6, height: 6)
                     Text(store.preferences.asrEngineMode == .appleOnDevice
                          ? "Apple 端侧语音引擎"
-                         : store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName)
+                         : (store.preferences.asrEngineMode == .localWhisper
+                            ? "Whisper 本机识别"
+                            : store.preferences.asrModelName.components(separatedBy: "/").last ?? store.preferences.asrModelName))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MFTheme.textSecondary)
                 }
@@ -958,6 +960,7 @@ private struct RecordingRowCard: View {
             case .completed: return MFTheme.mintGreen
             case .failed: return MFTheme.coralRed
             case .savedPendingTranscription: return MFTheme.warmAmber
+            case .transcriptNeedsReview: return MFTheme.warmAmber
             default: return MFTheme.iceBlue
             }
         }()

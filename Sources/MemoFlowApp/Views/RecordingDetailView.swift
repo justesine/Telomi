@@ -93,7 +93,9 @@ public struct RecordingDetailView: View {
                                     await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
                                 }
                             } label: {
-                                Label("重新转写逐字稿与AI整理", systemImage: "waveform.badge.magnifyingglass")
+                                Label(store.preferences.asrEngineMode == .localWhisper
+                                      ? "重新生成机器逐字稿" : "重新转写逐字稿与AI整理",
+                                      systemImage: "waveform.badge.magnifyingglass")
                             }
 
                             Button {
@@ -402,7 +404,8 @@ public struct RecordingDetailView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(MFTheme.warmAmber)
                     Spacer()
-                    MFLuminousActionButton("立即重试转写与整理", icon: "arrow.clockwise") {
+                    MFLuminousActionButton(store.preferences.asrEngineMode == .localWhisper
+                                            ? "重新生成机器逐字稿" : "立即重试转写与整理", icon: "arrow.clockwise") {
                         let mode = note?.mode ?? store.preferences.defaultNoteMode
                         Task {
                             await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
@@ -429,6 +432,10 @@ public struct RecordingDetailView: View {
     @ViewBuilder
     private func aiNoteAndActionsSection(rec: Recording) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            if rec.processingStatus == .transcriptNeedsReview {
+                Text("这份 AI 笔记仍基于旧逐字稿。请先回听新机器稿，不要据此确认行动或日程。")
+                    .font(.caption).foregroundStyle(MFTheme.warmAmber)
+            }
             noteContentCard(rec: rec)
 
             if !confirmedActions.isEmpty {
@@ -678,6 +685,10 @@ public struct RecordingDetailView: View {
                 Text("这份历史逐字稿尚无音频来源校验记录，请回听核对；重新转写成功前会保留原稿。")
                     .font(.caption).foregroundStyle(MFTheme.warmAmber)
             }
+            if rec.processingStatus == .transcriptNeedsReview {
+                Text("本机 Whisper 机器稿已绑定原音频，但字词与说话人尚未听校；旧 AI 笔记仍基于旧稿。")
+                    .font(.caption).foregroundStyle(MFTheme.warmAmber)
+            }
             if segments.contains(where: { $0.timingIsEstimated == true }) {
                 Text("带「约」的时间为文本分配的估计位置，需回听确认。")
                     .font(.caption).foregroundStyle(MFTheme.textSecondary)
@@ -728,6 +739,9 @@ public struct RecordingDetailView: View {
                 .buttonStyle(.plain)
             }
 
+            // Long recordings can have thousands of rows. Build only the rows
+            // near the viewport so opening a transcript does not freeze the UI.
+            LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { seg in
                 let isCurrentSegment = isPlayingThis && playMs >= seg.startMs && playMs <= seg.endMs
                 let highlight = (rec.marks ?? []).first { $0.kind == "highlight" && $0.startMs == seg.startMs && $0.quote == seg.text }
@@ -815,6 +829,7 @@ public struct RecordingDetailView: View {
                     padding: 12,
                     tint: highlight != nil ? MFTheme.warmAmber : (isCurrentSegment ? MFTheme.iceCyan : nil)
                 )
+            }
             }
         }
     }

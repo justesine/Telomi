@@ -5,13 +5,17 @@ import Security
 public enum ASREngineMode: String, Codable, CaseIterable, Sendable {
     case openAICompatible = "openai_compatible"
     case appleOnDevice = "apple_on_device"
+    case localWhisper = "local_whisper"
 
     public var displayTitle: String {
         switch self {
         case .openAICompatible: return "OpenAI 兼容语音 API（硅基流动 / Groq / OpenAI）"
         case .appleOnDevice: return "Apple 端侧语音识别（SFSpeechRecognizer）"
+        case .localWhisper: return "本机 Whisper（长录音候选稿，需校对）"
         }
     }
+
+    public var sendsAudioToCloud: Bool { self == .openAICompatible }
 }
 
 /// 界面视觉主题（PRD V1.3 VIS-001：Readwise 极简暖纸 / 暖炭夜读 / 跟随系统）

@@ -324,7 +324,7 @@ public final class MemoFlowStore: ObservableObject {
         }
 
         // 检查云处理授权偏好（PRD R12 & A28）
-        if preferences.asrEngineMode == .appleOnDevice && (KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty {
+        if !preferences.asrEngineMode.sendsAudioToCloud && (KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty {
             // 纯本地模式无需上传云端
             Task {
                 await runProcessingPipeline(for: id, mode: selectedMode)
@@ -370,7 +370,7 @@ public final class MemoFlowStore: ObservableObject {
     ) async {
         guard let idx = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
         var recording = recordings[idx]
-        let needsCloud = preferences.asrEngineMode != .appleOnDevice ||
+        let needsCloud = preferences.asrEngineMode.sendsAudioToCloud ||
             !(KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty
         if needsCloud && !cloudConsentGranted && !processingConsent.canAutoProcessWithoutPrompt {
             pendingConsentRecordingId = recordingId
@@ -451,11 +451,23 @@ public final class MemoFlowStore: ObservableObject {
                 segments = rawSegments
                 segmentsByRecording[recordingId] = segments
                 recordings[currentIndex].duration = duration
+                let engine: String
+                switch pipelinePreferences.asrEngineMode {
+                case .appleOnDevice: engine = "Apple Speech · on-device"
+                case .localWhisper: engine = "Whisper large-v3-turbo · local · needs review"
+                case .openAICompatible: engine = pipelinePreferences.asrModelName
+                }
                 recordings[currentIndex].transcriptSource = TranscriptSource(fileName: recording.localAudioFileName,
-                    sha256: fingerprint, audioDuration: duration,
-                    engine: preferences.asrEngineMode == .appleOnDevice ? "Apple Speech · on-device" : preferences.asrModelName,
-                    completedAt: Date())
+                    sha256: fingerprint, audioDuration: duration, engine: engine, completedAt: Date())
                 saveToDisk()
+                if pipelinePreferences.asrEngineMode == .localWhisper {
+                    let message = "本机 Whisper 已生成机器逐字稿，需回听校对；现有 AI 笔记仍基于旧稿。"
+                    updateRecordingStatus(recordingId, status: .transcriptNeedsReview, failureReason: message)
+                    processingJobsByRecording[recordingId] = ProcessingJob(recordingId: recordingId,
+                        stage: .transcriptNeedsReview, status: "needs_review", attempts: previousAttempts + 1)
+                    saveToDisk()
+                    return
+                }
             }
 
             // 阶段 ④：AI 整理与有证据的行动提取
