@@ -626,4 +626,319 @@ final class ObsidianPhasedTests: XCTestCase {
         XCTAssertFalse(store.preferences.knowledgeContextEnabled)
         XCTAssertFalse(store.preferences.allowSendingKnowledgeToCloudLLM)
     }
+
+    // MARK: - P2-6: 有限字段的双向同步（个人补充、手动标签、项目关联、批注书签 + 重命名/移动 + 防循环 + 冲突 + 删笔记保原音频）
+
+    @MainActor
+    func testP2_6_BidirectionalScopedSyncRenameMoveAntiLoopAndConflictResolution() throws {
+        let (rootDir, vaultDir, store) = try makeIsolatedEnvironment()
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        let rec = try XCTUnwrap(store.recordings.first)
+        let rev = try XCTUnwrap(store.currentRevision(for: rec.id))
+
+        // 初始准备四个受控字段并首次导出
+        store.saveUserEditedNote(
+            for: rec.id,
+            newTitle: rec.title,
+            newContent: rev.content,
+            projectName: "科研栏目首期",
+            userSupplement: "MemoFlow 初始手记补充。",
+            manualTags: ["采访"]
+        )
+        store.addBookmarkMark(
+            recordingId: rec.id,
+            atMs: 5000,
+            quote: "首期围绕真实研究过程展开",
+            note: "初始批注",
+            kind: "highlight"
+        )
+        let exported = try store.saveNoteDirectlyToObsidian(for: rec.id)
+
+        // 1. Obsidian -> MemoFlow 拉取（修改个人补充、新增标签、改关联项目、改批注并手写新增一条书签）
+        var diskMarkdown = try String(contentsOf: exported.fileURL, encoding: .utf8)
+        diskMarkdown = diskMarkdown.replacingOccurrences(
+            of: "MemoFlow 初始手记补充。",
+            with: "Obsidian 中补充的磁带机校准细节。"
+        )
+        diskMarkdown = diskMarkdown.replacingOccurrences(
+            of: ", 采访]",
+            with: ", 采访, 模拟器材]"
+        )
+        diskMarkdown = diskMarkdown.replacingOccurrences(
+            of: "\"[[科研栏目首期]]\"",
+            with: "\"[[磁带修复项目]]\""
+        )
+        diskMarkdown = diskMarkdown.replacingOccurrences(
+            of: "  - 批注：初始批注",
+            with: "  - 批注：Obsidian 更新后的批注\n- [00:12] 手写新增方位角书签\n  - 批注：需用示波器复核"
+        )
+        try Data(diskMarkdown.utf8).write(to: exported.fileURL, options: .atomic)
+        let shaBeforePull = ObsidianNoteSyncService.sha256Hex(of: try Data(contentsOf: exported.fileURL))
+
+        let pullOutcome = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: rec.id))
+        XCTAssertTrue(pullOutcome.didPullToMemoFlow)
+        XCTAssertFalse(pullOutcome.didWriteToDisk, "仅从 Obsidian 拉取变更时不应重写磁盘，防止文件监听死循环")
+
+        let shaAfterPull = ObsidianNoteSyncService.sha256Hex(of: try Data(contentsOf: exported.fileURL))
+        XCTAssertEqual(shaBeforePull, shaAfterPull, "拉取后磁盘文件 SHA-256 必须保持不变")
+
+        let pulledNote = try XCTUnwrap(store.notesByRecording[rec.id])
+        XCTAssertEqual(pulledNote.userSupplement, "Obsidian 中补充的磁带机校准细节。")
+        XCTAssertEqual(Set(pulledNote.manualTags), Set(["采访", "模拟器材"]))
+        XCTAssertEqual(pulledNote.projectName, "磁带修复项目")
+
+        let pulledMarks = try XCTUnwrap(store.recordings.first(where: { $0.id == rec.id })?.marks)
+        XCTAssertEqual(pulledMarks.count, 2)
+        XCTAssertTrue(pulledMarks.contains(where: { $0.note == "Obsidian 更新后的批注" }))
+        XCTAssertTrue(pulledMarks.contains(where: { $0.startMs == 12_000 && $0.quote.contains("手写新增方位角书签") && $0.note == "需用示波器复核" }))
+
+        // 2. 防循环水位线幂等性验证：连续再次同步不产生任何读写
+        let noop1 = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: rec.id))
+        let noop2 = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: rec.id))
+        XCTAssertFalse(noop1.didPullToMemoFlow)
+        XCTAssertFalse(noop1.didWriteToDisk)
+        XCTAssertFalse(noop2.didPullToMemoFlow)
+        XCTAssertFalse(noop2.didWriteToDisk)
+
+        // 3. 在 Obsidian 重命名并跨目录移动笔记 + 在 MemoFlow 修改四个字段 -> 推送回移动后的同一篇笔记
+        let movedDir = vaultDir.appendingPathComponent("归档复盘", isDirectory: true)
+        try FileManager.default.createDirectory(at: movedDir, withIntermediateDirectories: true)
+        let movedURL = movedDir.appendingPathComponent("重命名后的双向同步笔记.md")
+        try FileManager.default.moveItem(at: exported.fileURL, to: movedURL)
+
+        let latestRev = try XCTUnwrap(store.currentRevision(for: rec.id))
+        store.saveUserEditedNote(
+            for: rec.id,
+            newTitle: rec.title,
+            newContent: latestRev.content,
+            projectName: "模拟器材志",
+            userSupplement: "MemoFlow 端跟进补充的新段落。",
+            manualTags: ["模拟器材", "终审"]
+        )
+        store.addBookmarkMark(
+            recordingId: rec.id,
+            atMs: 25_000,
+            quote: "新增第三条书签",
+            note: "MemoFlow 新增标记",
+            kind: "bookmark"
+        )
+
+        let pushOutcome = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: rec.id))
+        XCTAssertNotNil(pushOutcome.relocatedFromOldPath)
+        XCTAssertEqual(pushOutcome.binding.vaultRelativePath, "归档复盘/重命名后的双向同步笔记.md")
+        XCTAssertTrue(pushOutcome.didWriteToDisk)
+
+        let pushedText = try String(contentsOf: movedURL, encoding: .utf8)
+        XCTAssertTrue(pushedText.contains("MemoFlow 端跟进补充的新段落。"))
+        XCTAssertTrue(pushedText.contains("终审"))
+        XCTAssertFalse(pushedText.contains("采访"), "在 MemoFlow 移除的手动标签应同步在 Obsidian 移除")
+        XCTAssertTrue(pushedText.contains("[[模拟器材志]]"))
+        XCTAssertTrue(pushedText.contains("MemoFlow 新增标记"))
+
+        // 4. 双方同时修改同一受控字段（userSupplement） -> 检测冲突保留双方快照 -> 合并解决冲突
+        let revBeforeConflict = try XCTUnwrap(store.currentRevision(for: rec.id))
+        store.saveUserEditedNote(
+            for: rec.id,
+            newTitle: rec.title,
+            newContent: revBeforeConflict.content,
+            projectName: "模拟器材志",
+            userSupplement: "MemoFlow 并发修改的补充版本"
+        )
+        let concurrentDisk = pushedText.replacingOccurrences(
+            of: "MemoFlow 端跟进补充的新段落。",
+            with: "Obsidian 并发修改的补充版本"
+        )
+        try Data(concurrentDisk.utf8).write(to: movedURL, options: .atomic)
+
+        let conflictOutcome = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: rec.id))
+        XCTAssertEqual(conflictOutcome.binding.status, .hasConflict)
+        XCTAssertTrue(conflictOutcome.binding.scopedFieldConflicts.contains(where: { $0.field == .userSupplement }))
+
+        try store.resolveScopedFieldConflict(
+            for: rec.id,
+            field: .userSupplement,
+            choice: .keepBothMerged
+        )
+        let resolvedBinding = try XCTUnwrap(store.obsidianBindingsByRecording[rec.id])
+        XCTAssertTrue(resolvedBinding.scopedFieldConflicts.isEmpty)
+        XCTAssertEqual(resolvedBinding.status, .synced)
+
+        let mergedNote = try XCTUnwrap(store.notesByRecording[rec.id])
+        XCTAssertTrue(mergedNote.userSupplement.contains("Obsidian 并发修改的补充版本"))
+        XCTAssertTrue(mergedNote.userSupplement.contains("MemoFlow 并发修改的补充版本"))
+
+        let mergedDiskText = try String(contentsOf: movedURL, encoding: .utf8)
+        XCTAssertTrue(mergedDiskText.contains("Obsidian 并发修改的补充版本"))
+        XCTAssertTrue(mergedDiskText.contains("MemoFlow 并发修改的补充版本"))
+    }
+
+    @MainActor
+    func testP2_6_DeletingObsidianNoteMarksMissingAndNeverDeletesOriginalAudio() throws {
+        let (rootDir, _, store) = try makeIsolatedEnvironment()
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        let customId = UUID()
+        let customFileName = "rec_\(customId.uuidString).wav"
+        let audioURL = store.audioService.ensurePlayableDemoAudioFile(named: customFileName, durationSeconds: 8)
+        let originalAudioData = try Data(contentsOf: audioURL)
+
+        store.handleFinishedRecording(
+            id: customId,
+            fileName: customFileName,
+            createdAt: Date(),
+            duration: 8,
+            selectedMode: .quickNote,
+            isNetworkAvailable: false
+        )
+        let segs = [TranscriptSegment(id: "s1", recordingId: customId, startMs: 0, endMs: 8000, text: "删除笔记绝不能影响原音频。")]
+        store.segmentsByRecording[customId] = segs
+        let revId = UUID()
+        let out = ASRAndLLMService.shared.organizeLocallyWithHeuristics(
+            recording: try XCTUnwrap(store.recordings.first(where: { $0.id == customId })),
+            segments: segs,
+            requestedMode: .quickNote,
+            revisionId: revId,
+            preferences: store.preferences
+        )
+        store.applyOrganizationOutput(out, for: customId, requestedMode: .quickNote, revisionId: revId)
+
+        let exported = try store.saveNoteDirectlyToObsidian(for: customId)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exported.fileURL.path))
+
+        // 用户在 Obsidian 中删除了这篇 .md 笔记
+        try FileManager.default.removeItem(at: exported.fileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exported.fileURL.path))
+
+        let outcome = try XCTUnwrap(try store.syncScopedFieldsWithObsidian(for: customId))
+        XCTAssertTrue(outcome.noteWasDeletedInVault)
+        XCTAssertEqual(outcome.binding.status, .missingInVault)
+
+        // 验收：本地录音条目、笔记结构与磁盘原音频 100% 完好无损
+        XCTAssertTrue(store.recordings.contains(where: { $0.id == customId }))
+        XCTAssertNotNil(store.notesByRecording[customId])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+        XCTAssertEqual(try Data(contentsOf: audioURL), originalAudioData)
+    }
+
+    // MARK: - P2-7: iPhone 与 Mac 跨设备音频可用性（区分笔记已同步与音频已同步、杜绝绝对路径、未同步提示与附件回听）
+
+    @MainActor
+    func testP2_7_CrossDeviceAudioAvailabilityRelativeAttachmentAndMissingAudioHandling() throws {
+        let fm = FileManager.default
+        let rootDir = fm.temporaryDirectory.appendingPathComponent("MemoFlowCrossDeviceTest-\(UUID().uuidString)", isDirectory: true)
+        let sharedVaultDir = rootDir.appendingPathComponent("SharedICloudVault", isDirectory: true)
+        let macDir = rootDir.appendingPathComponent("MacDevice", isDirectory: true)
+        let iphoneDir = rootDir.appendingPathComponent("iPhoneDevice", isDirectory: true)
+        try fm.createDirectory(at: sharedVaultDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: macDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: iphoneDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: rootDir) }
+
+        let macStore = MemoFlowStore(customStorageURL: macDir.appendingPathComponent("mac_state.json"))
+        macStore.bindObsidianVault(sharedVaultDir)
+
+        let iphoneStore = MemoFlowStore(customStorageURL: iphoneDir.appendingPathComponent("iphone_state.json"))
+        // 清空 iPhone 侧默认演示种子，模拟一台尚未收到此录音的独立设备
+        iphoneStore.recordings.removeAll()
+        iphoneStore.notesByRecording.removeAll()
+        iphoneStore.revisionsByNote.removeAll()
+        iphoneStore.segmentsByRecording.removeAll()
+        iphoneStore.bindObsidianVault(sharedVaultDir)
+
+        // 在 Mac 侧创建一条真实本地音频记录（非 demo_ 前缀）
+        let recId = UUID()
+        let localFileName = "rec_\(recId.uuidString).wav"
+        let macAudioURL = macStore.audioService.ensurePlayableDemoAudioFile(named: localFileName, durationSeconds: 10)
+        XCTAssertTrue(fm.fileExists(atPath: macAudioURL.path))
+
+        macStore.handleFinishedRecording(
+            id: recId,
+            fileName: localFileName,
+            createdAt: Date(),
+            duration: 10,
+            selectedMode: .quickNote,
+            isNetworkAvailable: false
+        )
+        let segs = [
+            TranscriptSegment(id: "seg_1", recordingId: recId, startMs: 0, endMs: 5000, text: "第一段跨端音频验证。", speakerName: "我"),
+            TranscriptSegment(id: "seg_2", recordingId: recId, startMs: 5000, endMs: 10000, text: "第二段跨端定位回听。", speakerName: "我")
+        ]
+        macStore.segmentsByRecording[recId] = segs
+        let revId = UUID()
+        let org = ASRAndLLMService.shared.organizeLocallyWithHeuristics(
+            recording: try XCTUnwrap(macStore.recordings.first(where: { $0.id == recId })),
+            segments: segs,
+            requestedMode: .quickNote,
+            revisionId: revId,
+            preferences: macStore.preferences
+        )
+        macStore.applyOrganizationOutput(org, for: recId, requestedMode: .quickNote, revisionId: revId)
+
+        // 场景 A：默认 localOnly 导出笔记 -> 笔记已同步，但音频未同步到 iPhone
+        macStore.preferences.audioSyncMode = .localOnly
+        let exportedLocalOnly = try macStore.saveNoteDirectlyToObsidian(for: recId)
+        let mdLocalOnly = try String(contentsOf: exportedLocalOnly.fileURL, encoding: .utf8)
+        XCTAssertTrue(mdLocalOnly.contains("audio_sync_status: \"local_only\""))
+        XCTAssertFalse(mdLocalOnly.contains("/Users/"), "导出的笔记严禁包含仅在 Mac 有效的绝对路径")
+        XCTAssertFalse(mdLocalOnly.contains(rootDir.path), "导出的笔记严禁包含宿主机临时目录绝对路径")
+
+        let hydratedCount = try iphoneStore.hydrateMissingRecordingsFromVault()
+        XCTAssertEqual(hydratedCount, 1)
+        let iphoneRecBeforeAudio = try XCTUnwrap(iphoneStore.recordings.first(where: { $0.id == recId }))
+        let overviewBefore = iphoneStore.syncOverview(for: iphoneRecBeforeAudio)
+        XCTAssertTrue(overviewBefore.isNoteSynced, "应识别为「笔记已同步」")
+        XCTAssertEqual(overviewBefore.noteBadgeTitle, "笔记已同步")
+        XCTAssertFalse(overviewBefore.audioState.isPlayableNow, "音频尚未到达时不能误报为可播")
+        XCTAssertFalse(overviewBefore.audioState.isAudioSyncedAcrossDevices, "应明确区分笔记已同步与音频未同步")
+        XCTAssertEqual(overviewBefore.audioState.badgeTitle, "音频未到达当前设备")
+
+        let deepLinkURL = try XCTUnwrap(MemoFlowDeepLink.recordingURL(recordingId: recId, startMs: 5000, endMs: 9000))
+        let missingAudioOutcome = iphoneStore.handleIncomingURL(deepLinkURL)
+        if case .audioMissingOnDevice(let id, _, let message) = missingAudioOutcome {
+            XCTAssertEqual(id, recId)
+            XCTAssertTrue(message.contains("笔记已同步"), "音频未到达时必须明确告知笔记已同步而原音频未到达")
+        } else {
+            XCTFail("Expected .audioMissingOnDevice when audio has not synced to iPhone, got \(missingAudioOutcome)")
+        }
+
+        // 场景 B：在 Mac 侧同步音频副本到笔记库相对附件目录
+        let relAudioPath = try macStore.syncAudioAttachmentToVault(for: recId)
+        XCTAssertEqual(relAudioPath, "MemoFlow笔记/Attachments/rec_\(recId.uuidString).wav")
+        XCTAssertFalse(relAudioPath.hasPrefix("/"))
+
+        let mdWithAttachment = try String(contentsOf: exportedLocalOnly.fileURL, encoding: .utf8)
+        XCTAssertTrue(mdWithAttachment.contains("audio_sync_status: \"synced_in_vault\""))
+        XCTAssertTrue(mdWithAttachment.contains("audio_attachment: \"\(relAudioPath)\""))
+        XCTAssertTrue(mdWithAttachment.contains("![[\(relAudioPath)]]"))
+        XCTAssertFalse(mdWithAttachment.contains("/Users/"), "同步附件后仍严禁写入任何 Mac 绝对路径")
+
+        // 模拟 iPhone 上笔记已更新，但音频附件在 iCloud 尚未下载完成
+        _ = try iphoneStore.syncScopedFieldsWithObsidian(for: recId)
+        iphoneStore.obsidianSyncService.simulatedUndownloadedRelativePaths.insert(relAudioPath)
+        let iphoneRecPendingCloud = try XCTUnwrap(iphoneStore.recordings.first(where: { $0.id == recId }))
+        let overviewCloudPending = iphoneStore.syncOverview(for: iphoneRecPendingCloud)
+        XCTAssertEqual(overviewCloudPending.audioState, .cloudNotDownloaded(relativePath: relAudioPath))
+        XCTAssertFalse(iphoneStore.playRecording(iphoneRecPendingCloud, startMs: 5000))
+
+        // 模拟 iCloud 音频附件下载完成 -> iPhone 直接通过相对附件回听并定位，且可一键缓存到本机录音目录
+        iphoneStore.obsidianSyncService.simulatedUndownloadedRelativePaths.removeAll()
+        let overviewSynced = iphoneStore.syncOverview(for: iphoneRecPendingCloud)
+        XCTAssertTrue(overviewSynced.isNoteSynced)
+        XCTAssertTrue(overviewSynced.audioState.isAudioSyncedAcrossDevices)
+        XCTAssertTrue(overviewSynced.audioState.isPlayableNow)
+
+        let playOutcome = iphoneStore.handleIncomingURL(deepLinkURL)
+        XCTAssertEqual(playOutcome, .opened(recordingId: recId, targetMs: 5000, isEstimated: false))
+        XCTAssertEqual(iphoneStore.audioService.playingRecordingId, recId)
+        iphoneStore.audioService.stopPlayback()
+
+        let cachedLocalURL = try iphoneStore.cacheVaultAudioToLocal(for: recId)
+        XCTAssertTrue(fm.fileExists(atPath: cachedLocalURL.path))
+        let iphoneRecCached = try XCTUnwrap(iphoneStore.recordings.first(where: { $0.id == recId }))
+        XCTAssertEqual(
+            iphoneStore.audioAvailability(for: iphoneRecCached),
+            .availableLocal(fileURL: cachedLocalURL, alsoSyncedInVault: true)
+        )
+    }
 }

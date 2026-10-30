@@ -338,6 +338,8 @@ public final class ObsidianNoteSyncService {
                         status: .synced,
                         pendingLegacyCandidatePaths: [],
                         conflicts: [],
+                        lastScopedSnapshot: ObsidianScopedSyncSnapshot.from(recording: recording, note: note),
+                        scopedFieldConflicts: [],
                         lastBackupFilePath: existingBinding?.lastBackupFilePath,
                         lastErrorMessage: nil
                     )
@@ -393,6 +395,12 @@ public final class ObsidianNoteSyncService {
                     try outData.write(to: coordinatedURL, options: .atomic)
                     let modDate = (try? coordinatedURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
 
+                    let postMergeScoped = Self.extractScopedSnapshot(
+                        from: merged.markdown,
+                        recordingId: recording.id
+                    )
+                    let activeScopedConflicts = existingBinding?.scopedFieldConflicts ?? []
+                    let hasAnyConflict = !merged.conflicts.isEmpty || !activeScopedConflicts.isEmpty
                     let binding = ObsidianNoteBinding(
                         recordingId: recording.id,
                         vaultRelativePath: targetRelPath,
@@ -403,9 +411,11 @@ public final class ObsidianNoteSyncService {
                         lastSyncedModificationDate: modDate,
                         managedBlockDigests: merged.updatedDigests,
                         managedBlockSnapshots: merged.updatedSnapshots,
-                        status: merged.conflicts.isEmpty ? .synced : .hasConflict,
+                        status: hasAnyConflict ? .hasConflict : .synced,
                         pendingLegacyCandidatePaths: [],
                         conflicts: merged.conflicts,
+                        lastScopedSnapshot: activeScopedConflicts.isEmpty ? postMergeScoped : (existingBinding?.lastScopedSnapshot ?? postMergeScoped),
+                        scopedFieldConflicts: activeScopedConflicts,
                         lastBackupFilePath: backupURL.path,
                         lastErrorMessage: nil
                     )
@@ -1000,10 +1010,25 @@ public final class ObsidianNoteSyncService {
         segments: [TranscriptSegment] = [],
         newBlocks: [ObsidianManagedBlockKind: String],
         existingBinding: ObsidianNoteBinding?,
-        isAssociatingLegacy: Bool
+        isAssociatingLegacy: Bool,
+        overrideExactUserTags: [String]? = nil,
+        useExactNoteProject: Bool = false,
+        overrideUserSupplement: String? = nil
     ) -> MergeOutput {
-        let (existingFrontmatter, existingBody) = splitFrontmatterAndBody(existingMarkdown)
+        let (existingFrontmatter, rawExistingBody) = splitFrontmatterAndBody(existingMarkdown)
         let preserved = extractFrontmatterPreservedFields(from: existingFrontmatter)
+
+        // 若调用方显式指定了个人补充推送值，或 MemoFlow 侧个人补充已更新且磁盘侧未改动，则同步更新个人补充区
+        var existingBody = rawExistingBody
+        if let explicitSupp = overrideUserSupplement {
+            existingBody = MarkdownExporterService.replaceUserSupplementRegion(in: existingBody, newSupplement: explicitSupp)
+        } else if let baseSnap = existingBinding?.lastScopedSnapshot {
+            let diskSupp = extractUserSupplement(from: rawExistingBody)
+            let localSupp = ObsidianScopedSyncSnapshot.normalizeSupplement(note.userSupplement)
+            if diskSupp == baseSnap.userSupplement && localSupp != baseSnap.userSupplement {
+                existingBody = MarkdownExporterService.replaceUserSupplementRegion(in: existingBody, newSupplement: note.userSupplement)
+            }
+        }
 
         let frontmatterLines = MarkdownExporterService.renderFrontmatterLines(
             recording: recording,
@@ -1012,7 +1037,9 @@ public final class ObsidianNoteSyncService {
             segments: segments,
             preservedUserTags: preserved.userTags,
             preservedCustomKeyBlocks: preserved.customKeyBlocks,
-            fallbackProjectRawValue: preserved.rawProjectValue
+            fallbackProjectRawValue: preserved.rawProjectValue,
+            overrideExactUserTags: overrideExactUserTags,
+            useExactNoteProject: useExactNoteProject
         )
 
         let bodyTokens = parseBodyTokens(existingBody)
@@ -1240,5 +1267,1102 @@ public final class ObsidianNoteSyncService {
             }
         }
         return nil
+    }
+
+    // MARK: - P2-6 Scoped Bidirectional Sync (userSupplement, manualTags, projectName, marks)
+
+    public struct ScopedReconcileOutcome: Sendable {
+        public var updatedUserSupplement: String?
+        public var updatedManualTags: [String]?
+        public var shouldUpdateProjectName: Bool
+        public var updatedProjectName: String?
+        public var updatedMarks: [RecordingMark]?
+        public var updatedVaultAudioRelativePath: String? = nil
+        public var binding: ObsidianNoteBinding
+        public var didWriteToDisk: Bool
+        public var didPullToMemoFlow: Bool
+        public var noteWasDeletedInVault: Bool
+        public var relocatedFromOldPath: String?
+    }
+
+    public static func extractUserSupplement(from bodyOrMarkdown: String) -> String {
+        let normalized = bodyOrMarkdown.replacingOccurrences(of: "\r\n", with: "\n")
+        guard let sRange = normalized.range(of: MarkdownExporterService.userSupplementStartMarker),
+              let eRange = normalized.range(of: MarkdownExporterService.userSupplementEndMarker, range: sRange.upperBound..<normalized.endIndex) else {
+            return ""
+        }
+        return ObsidianScopedSyncSnapshot.normalizeSupplement(
+            String(normalized[sRange.upperBound..<eRange.lowerBound])
+        )
+    }
+
+    /// 从 Obsidian `.md` 文本解析四个有限同步字段快照
+    public static func extractScopedSnapshot(
+        from markdown: String,
+        recordingId: UUID
+    ) -> ObsidianScopedSyncSnapshot {
+        let (frontmatterLines, body) = splitFrontmatterAndBody(markdown)
+        let preserved = extractFrontmatterPreservedFields(from: frontmatterLines)
+        let supplement = extractUserSupplement(from: body)
+        let unwrappedProject = ObsidianScopedSyncSnapshot.normalizeProject(preserved.rawProjectValue)
+        let parsedMarks = extractMarksFromBody(body, recordingId: recordingId)
+
+        return ObsidianScopedSyncSnapshot(
+            userSupplement: supplement,
+            manualTags: preserved.userTags,
+            projectName: unwrappedProject,
+            marks: parsedMarks
+        )
+    }
+
+    /// 解析 `marks` 受控区块内的书签、高亮与批注（同时兼容带 `memoflow:mark_id` 注释的标准行与用户在 Obsidian 手写新增的带时间戳条目）
+    public static func extractMarksFromBody(_ body: String, recordingId: UUID) -> [RecordingMark] {
+        let tokens = parseBodyTokens(body)
+        guard let marksInner = tokens.compactMap({ token -> String? in
+            if case .managed(.marks, let inner) = token { return inner }
+            return nil
+        }).first else {
+            return []
+        }
+
+        let effectiveInner = unwrapConflictUserContentIfPresent(marksInner, kind: .marks) ?? marksInner
+        let lines = effectiveInner.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var parsed: [RecordingMark] = []
+        let commentRegex = try? NSRegularExpression(
+            pattern: #"<!--\s*memoflow:mark_id=([0-9A-Fa-f\-]+);kind=([A-Za-z_]+);start_ms=(\d+)(?:;end_ms=(\d+))?\s*-->"#
+        )
+        let linkPrefixRegex = try? NSRegularExpression(
+            pattern: #"^-\s*\[([^\]]+)\](?:\([^)]*\))?\s*"#
+        )
+
+        var idx = 0
+        while idx < lines.count {
+            let line = lines[idx]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("- "), !line.hasPrefix("  ") && !line.hasPrefix("\t") else {
+                idx += 1
+                continue
+            }
+
+            var markId: UUID?
+            var kind: String = "bookmark"
+            var startMs: Int?
+            var endMs: Int?
+            var workingLine = trimmed
+
+            if let regex = commentRegex,
+               let match = regex.firstMatch(in: workingLine, range: NSRange(workingLine.startIndex..<workingLine.endIndex, in: workingLine)) {
+                if let r1 = Range(match.range(at: 1), in: workingLine) {
+                    markId = UUID(uuidString: String(workingLine[r1]))
+                }
+                if let r2 = Range(match.range(at: 2), in: workingLine) {
+                    kind = String(workingLine[r2])
+                }
+                if let r3 = Range(match.range(at: 3), in: workingLine) {
+                    startMs = Int(workingLine[r3])
+                }
+                if match.range(at: 4).location != NSNotFound,
+                   let r4 = Range(match.range(at: 4), in: workingLine) {
+                    endMs = Int(workingLine[r4])
+                }
+                if let fullCommentRange = Range(match.range(at: 0), in: workingLine) {
+                    workingLine.removeSubrange(fullCommentRange)
+                }
+            }
+
+            var bracketLabel = ""
+            if let lRegex = linkPrefixRegex,
+               let m = lRegex.firstMatch(in: workingLine, range: NSRange(workingLine.startIndex..<workingLine.endIndex, in: workingLine)),
+               let fullRange = Range(m.range(at: 0), in: workingLine) {
+                if let labelRange = Range(m.range(at: 1), in: workingLine) {
+                    bracketLabel = String(workingLine[labelRange])
+                }
+                workingLine.removeSubrange(fullRange)
+            } else if workingLine.hasPrefix("- ") {
+                workingLine = String(workingLine.dropFirst(2))
+            }
+
+            let quote = workingLine.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if startMs == nil {
+                if let parsedMs = parseTimestampMs(fromLabel: bracketLabel) ?? parseTimestampMs(fromLabel: trimmed) {
+                    startMs = parsedMs
+                } else {
+                    startMs = 0
+                }
+                if bracketLabel.contains("高亮") {
+                    kind = "highlight"
+                } else if bracketLabel.contains("批注") {
+                    kind = "note"
+                } else {
+                    kind = "bookmark"
+                }
+            }
+
+            // 读取紧随其后的缩进批注行（如 `  - 批注：xxx` 或 `  批注：xxx`）
+            var noteLines: [String] = []
+            var nextIdx = idx + 1
+            while nextIdx < lines.count {
+                let subRaw = lines[nextIdx]
+                guard subRaw.hasPrefix("  ") || subRaw.hasPrefix("\t") else { break }
+                var subTrimmed = subRaw.trimmingCharacters(in: .whitespaces)
+                if subTrimmed.hasPrefix("- ") {
+                    subTrimmed = String(subTrimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                }
+                if subTrimmed.hasPrefix("批注：") {
+                    subTrimmed = String(subTrimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                } else if subTrimmed.hasPrefix("批注:") {
+                    subTrimmed = String(subTrimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                }
+                if !subTrimmed.isEmpty {
+                    noteLines.append(subTrimmed)
+                }
+                nextIdx += 1
+            }
+
+            let finalStartMs = max(0, startMs ?? 0)
+            let finalNote = noteLines.joined(separator: "\n")
+            let finalId = markId ?? deterministicMarkUUID(recordingId: recordingId, startMs: finalStartMs, quote: quote)
+
+            parsed.append(
+                RecordingMark(
+                    id: finalId,
+                    startMs: finalStartMs,
+                    endMs: endMs,
+                    quote: quote,
+                    note: finalNote,
+                    kind: kind
+                )
+            )
+            idx = nextIdx
+        }
+
+        return ObsidianScopedSyncSnapshot.normalizeMarks(parsed)
+    }
+
+    private static func parseTimestampMs(fromLabel text: String) -> Int? {
+        if let regex = try? NSRegularExpression(pattern: #"(\d{2}):(\d{2}):(\d{2})"#),
+           let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+           let rH = Range(m.range(at: 1), in: text),
+           let rM = Range(m.range(at: 2), in: text),
+           let rS = Range(m.range(at: 3), in: text),
+           let hh = Int(text[rH]),
+           let mm = Int(text[rM]),
+           let ss = Int(text[rS]) {
+            return ((hh * 3600) + (mm * 60) + ss) * 1000
+        }
+        if let regex = try? NSRegularExpression(pattern: #"(?<!\d)(\d{2}):(\d{2})(?!\d)"#),
+           let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+           let rM = Range(m.range(at: 1), in: text),
+           let rS = Range(m.range(at: 2), in: text),
+           let mm = Int(text[rM]),
+           let ss = Int(text[rS]) {
+            return ((mm * 60) + ss) * 1000
+        }
+        return nil
+    }
+
+    private static func deterministicMarkUUID(recordingId: UUID, startMs: Int, quote: String) -> UUID {
+        let seed = "memoflow-mark:\(recordingId.uuidString):\(startMs):\(quote)"
+        let digest = Array(SHA256.hash(data: Data(seed.utf8)))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        let uuidTuple: uuid_t = (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        )
+        return UUID(uuid: uuidTuple)
+    }
+
+    private static func summarizeScopedField(_ field: ObsidianScopedField, in snap: ObsidianScopedSyncSnapshot) -> String {
+        switch field {
+        case .userSupplement:
+            return snap.userSupplement.isEmpty ? "（空）" : String(snap.userSupplement.prefix(80))
+        case .manualTags:
+            return snap.manualTags.isEmpty ? "（无手动标签）" : snap.manualTags.map { "#\($0)" }.joined(separator: " ")
+        case .projectName:
+            return snap.projectName.map { "[[\($0)]]" } ?? "（未关联项目）"
+        case .marks:
+            return snap.marks.isEmpty ? "（0 条标记）" : "共 \(snap.marks.count) 条书签/高亮批注"
+        }
+    }
+
+    /// 执行四个受控字段的双向三路对账同步（含重命名/移动重定位、删除笔记不删原音频保护、冲突检测与防循环写入水位线）
+    public func reconcileScopedFields(
+        recording: Recording,
+        note: Note,
+        revision: NoteRevision,
+        confirmedActions: [ConfirmedAction],
+        segments: [TranscriptSegment],
+        pendingDrafts: [ActionDraft],
+        vaultRootURL: URL,
+        targetSubfolder: String,
+        existingBinding: ObsidianNoteBinding,
+        backupsRootURL: URL
+    ) throws -> ScopedReconcileOutcome {
+        let fm = FileManager.default
+        let cleanSubfolder = targetSubfolder.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Step 1: 定位笔记（支持重命名与跨目录移动）
+        var resolvedURL: URL?
+        var resolvedRelPath: String?
+        var relocatedFrom: String?
+
+        if !existingBinding.vaultRelativePath.isEmpty,
+           let validRel = try? Self.validateSafeRelativePath(existingBinding.vaultRelativePath) {
+            let candidate = vaultRootURL.appendingPathComponent(validRel)
+            try verifyCloudDownloaded(fileURL: candidate, relativePath: validRel)
+            if fm.fileExists(atPath: candidate.path),
+               let text = try? Self.readCoordinatedUTF8(at: candidate),
+               Self.extractRecordingId(from: text) == recording.id {
+                resolvedURL = candidate
+                resolvedRelPath = validRel
+            }
+        }
+
+        if resolvedURL == nil {
+            if let relocated = try findNoteByRecordingId(
+                recordingId: recording.id,
+                vaultRootURL: vaultRootURL,
+                preferredSubfolder: cleanSubfolder
+            ) {
+                if !existingBinding.vaultRelativePath.isEmpty && existingBinding.vaultRelativePath != relocated.relativePath {
+                    relocatedFrom = existingBinding.vaultRelativePath
+                }
+                resolvedURL = relocated.fileURL
+                resolvedRelPath = relocated.relativePath
+            }
+        }
+
+        // Step 2: 若笔记已在 Obsidian 被删除 -> 仅更新关联状态为 missingInVault，绝不删除原音频或本地记录
+        guard let targetURL = resolvedURL, let targetRelPath = resolvedRelPath else {
+            var missingBinding = existingBinding
+            missingBinding.status = .missingInVault
+            missingBinding.lastErrorMessage = "Obsidian 中的对应笔记已被移除。本地录音与原音频完好保留，可随时重新导出生成笔记。"
+            return ScopedReconcileOutcome(
+                updatedUserSupplement: nil,
+                updatedManualTags: nil,
+                shouldUpdateProjectName: false,
+                updatedProjectName: nil,
+                updatedMarks: nil,
+                binding: missingBinding,
+                didWriteToDisk: false,
+                didPullToMemoFlow: false,
+                noteWasDeletedInVault: true,
+                relocatedFromOldPath: nil
+            )
+        }
+
+        // Step 3: 读取当前磁盘内容，检查防循环水位线（SHA-256 + ScopedSnapshot 双重短路）
+        try verifyCloudDownloaded(fileURL: targetURL, relativePath: targetRelPath)
+        let diskData = try Data(contentsOf: targetURL)
+        let diskSHA = Self.sha256Hex(of: diskData)
+        guard let diskText = String(data: diskData, encoding: .utf8) else {
+            throw ObsidianSyncError.fileOperationFailed("笔记文件不是有效的 UTF-8 编码")
+        }
+
+        let localSnap = ObsidianScopedSyncSnapshot.from(recording: recording, note: note)
+        if let baseSnap = existingBinding.lastScopedSnapshot,
+           existingBinding.lastSyncedFileSHA256 == diskSHA,
+           localSnap == baseSnap,
+           existingBinding.scopedFieldConflicts.isEmpty {
+            var updatedBinding = existingBinding
+            updatedBinding.vaultRelativePath = targetRelPath
+            updatedBinding.lastKnownFileName = targetURL.lastPathComponent
+            if updatedBinding.status == .missingInVault {
+                updatedBinding.status = updatedBinding.conflicts.isEmpty ? .synced : .hasConflict
+            }
+            return ScopedReconcileOutcome(
+                updatedUserSupplement: nil,
+                updatedManualTags: nil,
+                shouldUpdateProjectName: false,
+                updatedProjectName: nil,
+                updatedMarks: nil,
+                binding: updatedBinding,
+                didWriteToDisk: false,
+                didPullToMemoFlow: false,
+                noteWasDeletedInVault: false,
+                relocatedFromOldPath: relocatedFrom
+            )
+        }
+
+        // Step 4: 逐字段执行三路比较（Base vs MemoFlow Local vs Obsidian Disk）
+        let (diskYamlLines, _) = Self.splitFrontmatterAndBody(diskText)
+        let diskYamlMap = Self.parseSimpleYAMLKeyValues(from: diskYamlLines ?? [])
+        let diskRelAudio = MarkdownExporterService.sanitizedVaultRelativeAudioPath(diskYamlMap["audio_attachment"])
+        let pulledAudioRelPath: String? = (diskRelAudio != nil && diskRelAudio != recording.vaultAudioRelativePath) ? diskRelAudio : nil
+
+        let diskSnap = Self.extractScopedSnapshot(from: diskText, recordingId: recording.id)
+        let baseSnap = existingBinding.lastScopedSnapshot ?? diskSnap
+
+        var pullSupplement: String?
+        var pullTags: [String]?
+        var shouldPullProject = false
+        var pullProjectValue: String?
+        var pullMarks: [RecordingMark]?
+
+        var pushSupplementToDisk: String?
+        var pushTagsToDisk: [String]?
+        var pushProjectToDisk = false
+        var pushMarksToDisk = false
+
+        var resolvedSnap = baseSnap
+        var newScopedConflicts: [ObsidianScopedFieldConflict] = []
+
+        // 4a. userSupplement
+        if diskSnap.userSupplement == localSnap.userSupplement {
+            resolvedSnap.userSupplement = localSnap.userSupplement
+        } else if diskSnap.userSupplement != baseSnap.userSupplement && localSnap.userSupplement == baseSnap.userSupplement {
+            pullSupplement = diskSnap.userSupplement
+            resolvedSnap.userSupplement = diskSnap.userSupplement
+        } else if localSnap.userSupplement != baseSnap.userSupplement && diskSnap.userSupplement == baseSnap.userSupplement {
+            pushSupplementToDisk = localSnap.userSupplement
+            resolvedSnap.userSupplement = localSnap.userSupplement
+        } else {
+            newScopedConflicts.append(
+                ObsidianScopedFieldConflict(
+                    field: .userSupplement,
+                    memoFlowSummary: Self.summarizeScopedField(.userSupplement, in: localSnap),
+                    obsidianSummary: Self.summarizeScopedField(.userSupplement, in: diskSnap),
+                    memoFlowSnapshot: localSnap,
+                    obsidianSnapshot: diskSnap
+                )
+            )
+        }
+
+        // 4b. manualTags
+        if diskSnap.manualTags == localSnap.manualTags {
+            resolvedSnap.manualTags = localSnap.manualTags
+        } else if diskSnap.manualTags != baseSnap.manualTags && localSnap.manualTags == baseSnap.manualTags {
+            pullTags = diskSnap.manualTags
+            resolvedSnap.manualTags = diskSnap.manualTags
+        } else if localSnap.manualTags != baseSnap.manualTags && diskSnap.manualTags == baseSnap.manualTags {
+            pushTagsToDisk = localSnap.manualTags
+            resolvedSnap.manualTags = localSnap.manualTags
+        } else {
+            newScopedConflicts.append(
+                ObsidianScopedFieldConflict(
+                    field: .manualTags,
+                    memoFlowSummary: Self.summarizeScopedField(.manualTags, in: localSnap),
+                    obsidianSummary: Self.summarizeScopedField(.manualTags, in: diskSnap),
+                    memoFlowSnapshot: localSnap,
+                    obsidianSnapshot: diskSnap
+                )
+            )
+        }
+
+        // 4c. projectName
+        if diskSnap.projectName == localSnap.projectName {
+            resolvedSnap.projectName = localSnap.projectName
+        } else if diskSnap.projectName != baseSnap.projectName && localSnap.projectName == baseSnap.projectName {
+            shouldPullProject = true
+            pullProjectValue = diskSnap.projectName
+            resolvedSnap.projectName = diskSnap.projectName
+        } else if localSnap.projectName != baseSnap.projectName && diskSnap.projectName == baseSnap.projectName {
+            pushProjectToDisk = true
+            resolvedSnap.projectName = localSnap.projectName
+        } else {
+            newScopedConflicts.append(
+                ObsidianScopedFieldConflict(
+                    field: .projectName,
+                    memoFlowSummary: Self.summarizeScopedField(.projectName, in: localSnap),
+                    obsidianSummary: Self.summarizeScopedField(.projectName, in: diskSnap),
+                    memoFlowSnapshot: localSnap,
+                    obsidianSnapshot: diskSnap
+                )
+            )
+        }
+
+        // 4d. marks
+        if diskSnap.marks == localSnap.marks {
+            resolvedSnap.marks = localSnap.marks
+        } else if diskSnap.marks != baseSnap.marks && localSnap.marks == baseSnap.marks {
+            pullMarks = diskSnap.marks
+            resolvedSnap.marks = diskSnap.marks
+        } else if localSnap.marks != baseSnap.marks && diskSnap.marks == baseSnap.marks {
+            pushMarksToDisk = true
+            resolvedSnap.marks = localSnap.marks
+        } else {
+            newScopedConflicts.append(
+                ObsidianScopedFieldConflict(
+                    field: .marks,
+                    memoFlowSummary: Self.summarizeScopedField(.marks, in: localSnap),
+                    obsidianSummary: Self.summarizeScopedField(.marks, in: diskSnap),
+                    memoFlowSnapshot: localSnap,
+                    obsidianSnapshot: diskSnap
+                )
+            )
+        }
+
+        let didPull = (pullSupplement != nil || pullTags != nil || shouldPullProject || pullMarks != nil || pulledAudioRelPath != nil)
+        let needsDiskWrite = (pushSupplementToDisk != nil || pushTagsToDisk != nil || pushProjectToDisk || pushMarksToDisk)
+
+        // Step 5: 若无需向 Obsidian 推送字段（例如仅从 Obsidian 拉取回 MemoFlow，或双方实质相等），绝不重写磁盘文件，彻底杜绝循环触发文件监听！
+        if !needsDiskWrite {
+            var nextBinding = existingBinding
+            nextBinding.vaultRelativePath = targetRelPath
+            nextBinding.lastKnownFileName = targetURL.lastPathComponent
+            nextBinding.scopedFieldConflicts = newScopedConflicts
+            if newScopedConflicts.isEmpty {
+                nextBinding.lastScopedSnapshot = resolvedSnap
+                nextBinding.lastSyncedFileSHA256 = diskSHA
+                // 若从 Obsidian 拉取了 marks 更新，同步刷新 marks 受控区块基准摘要以免后续误判冲突
+                if pullMarks != nil {
+                    let tokens = Self.parseBodyTokens(Self.splitFrontmatterAndBody(diskText).body)
+                    for tok in tokens {
+                        if case .managed(.marks, let inner) = tok {
+                            nextBinding.managedBlockDigests[ObsidianManagedBlockKind.marks.rawValue] = Self.normalizedBlockDigest(inner)
+                            nextBinding.managedBlockSnapshots[ObsidianManagedBlockKind.marks.rawValue] = inner
+                        }
+                    }
+                }
+            }
+            nextBinding.status = (!nextBinding.conflicts.isEmpty || !newScopedConflicts.isEmpty) ? .hasConflict : .synced
+            nextBinding.lastErrorMessage = nil
+
+            return ScopedReconcileOutcome(
+                updatedUserSupplement: pullSupplement,
+                updatedManualTags: pullTags,
+                shouldUpdateProjectName: shouldPullProject,
+                updatedProjectName: pullProjectValue,
+                updatedMarks: pullMarks,
+                updatedVaultAudioRelativePath: pulledAudioRelPath,
+                binding: nextBinding,
+                didWriteToDisk: false,
+                didPullToMemoFlow: didPull,
+                noteWasDeletedInVault: false,
+                relocatedFromOldPath: relocatedFrom
+            )
+        }
+
+        // Step 6: 构造已合并非冲突拉取项的记录与笔记副本，将 MemoFlow 变更安全推送回 Obsidian（若有单字段冲突，保留磁盘侧冲突字段原状！）
+        var effectiveRec = recording
+        let marksConflictExists = newScopedConflicts.contains { $0.field == .marks }
+        if marksConflictExists {
+            effectiveRec.marks = diskSnap.marks
+        } else {
+            effectiveRec.marks = resolvedSnap.marks
+        }
+
+        var effectiveNote = note
+        let suppConflictExists = newScopedConflicts.contains { $0.field == .userSupplement }
+        let tagsConflictExists = newScopedConflicts.contains { $0.field == .manualTags }
+        let projConflictExists = newScopedConflicts.contains { $0.field == .projectName }
+
+        effectiveNote.userSupplement = suppConflictExists ? diskSnap.userSupplement : resolvedSnap.userSupplement
+        effectiveNote.manualTags = tagsConflictExists ? diskSnap.manualTags : resolvedSnap.manualTags
+        effectiveNote.projectName = projConflictExists ? diskSnap.projectName : resolvedSnap.projectName
+
+        var prePushBinding = existingBinding
+        if pushMarksToDisk && !marksConflictExists {
+            // MemoFlow 侧主动更新了 marks 且磁盘未改，对齐基准摘要以便原位更新 marks 区块
+            let tokens = Self.parseBodyTokens(Self.splitFrontmatterAndBody(diskText).body)
+            for tok in tokens {
+                if case .managed(.marks, let inner) = tok {
+                    prePushBinding.managedBlockDigests[ObsidianManagedBlockKind.marks.rawValue] = Self.normalizedBlockDigest(inner)
+                }
+            }
+        }
+        if pushProjectToDisk && !projConflictExists {
+            let tokens = Self.parseBodyTokens(Self.splitFrontmatterAndBody(diskText).body)
+            for tok in tokens {
+                if case .managed(.header, let inner) = tok {
+                    prePushBinding.managedBlockDigests[ObsidianManagedBlockKind.header.rawValue] = Self.normalizedBlockDigest(inner)
+                }
+            }
+        }
+
+        let newBlocks = MarkdownExporterService.renderManagedBlocks(
+            recording: effectiveRec,
+            note: effectiveNote,
+            revision: revision,
+            confirmedActions: confirmedActions,
+            segments: segments,
+            pendingDrafts: pendingDrafts
+        )
+
+        var coordError: NSError?
+        var writeResult: Result<ObsidianNoteBinding, Error>?
+
+        NSFileCoordinator().coordinate(writingItemAt: targetURL, options: .forMerging, error: &coordError) { coordinatedURL in
+            writeResult = Result {
+                let rawData = try Data(contentsOf: coordinatedURL)
+                guard let currentText = String(data: rawData, encoding: .utf8) else {
+                    throw ObsidianSyncError.fileOperationFailed("UTF-8 解码失败")
+                }
+
+                let backupURL = try Self.savePreWriteBackup(
+                    originalData: rawData,
+                    recordingId: recording.id,
+                    fileName: coordinatedURL.lastPathComponent,
+                    backupsRootURL: backupsRootURL
+                )
+
+                let merged = Self.mergeExistingMarkdown(
+                    existingMarkdown: currentText,
+                    recording: effectiveRec,
+                    note: effectiveNote,
+                    revision: revision,
+                    segments: segments,
+                    newBlocks: newBlocks,
+                    existingBinding: prePushBinding,
+                    isAssociatingLegacy: false,
+                    overrideExactUserTags: tagsConflictExists ? diskSnap.manualTags : resolvedSnap.manualTags,
+                    useExactNoteProject: !projConflictExists,
+                    overrideUserSupplement: suppConflictExists ? nil : resolvedSnap.userSupplement
+                )
+
+                let outData = Data(merged.markdown.utf8)
+                try outData.write(to: coordinatedURL, options: .atomic)
+                let modDate = (try? coordinatedURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+
+                let hasConflict = !merged.conflicts.isEmpty || !newScopedConflicts.isEmpty
+                return ObsidianNoteBinding(
+                    recordingId: recording.id,
+                    vaultRelativePath: targetRelPath,
+                    lastKnownFileName: coordinatedURL.lastPathComponent,
+                    lastExportedRevisionId: revision.id,
+                    lastExportedAt: Date(),
+                    lastSyncedFileSHA256: Self.sha256Hex(of: outData),
+                    lastSyncedModificationDate: modDate,
+                    managedBlockDigests: merged.updatedDigests,
+                    managedBlockSnapshots: merged.updatedSnapshots,
+                    status: hasConflict ? .hasConflict : .synced,
+                    pendingLegacyCandidatePaths: [],
+                    conflicts: merged.conflicts,
+                    lastScopedSnapshot: newScopedConflicts.isEmpty ? resolvedSnap : baseSnap,
+                    scopedFieldConflicts: newScopedConflicts,
+                    lastBackupFilePath: backupURL.path,
+                    lastErrorMessage: nil
+                )
+            }
+        }
+
+        if let coordError {
+            throw ObsidianSyncError.fileOperationFailed(coordError.localizedDescription)
+        }
+        guard let writeResult else {
+            throw ObsidianSyncError.fileOperationFailed("双向字段写入未完成")
+        }
+
+        let updatedBinding = try writeResult.get()
+        return ScopedReconcileOutcome(
+            updatedUserSupplement: pullSupplement,
+            updatedManualTags: pullTags,
+            shouldUpdateProjectName: shouldPullProject,
+            updatedProjectName: pullProjectValue,
+            updatedMarks: pullMarks,
+            updatedVaultAudioRelativePath: pulledAudioRelPath,
+            binding: updatedBinding,
+            didWriteToDisk: true,
+            didPullToMemoFlow: didPull,
+            noteWasDeletedInVault: false,
+            relocatedFromOldPath: relocatedFrom
+        )
+    }
+
+    /// 解决单个受控字段的双向同步冲突（保留 Obsidian 版本 / 采用 MemoFlow 版本 / 合并双方）
+    public func resolveScopedFieldConflict(
+        field: ObsidianScopedField,
+        choice: ObsidianConflictResolutionChoice,
+        recording: Recording,
+        note: Note,
+        revision: NoteRevision,
+        confirmedActions: [ConfirmedAction],
+        segments: [TranscriptSegment],
+        pendingDrafts: [ActionDraft],
+        vaultRootURL: URL,
+        binding: ObsidianNoteBinding,
+        backupsRootURL: URL
+    ) throws -> (resolvedSnapshot: ObsidianScopedSyncSnapshot, binding: ObsidianNoteBinding) {
+        guard let conflict = binding.scopedFieldConflicts.first(where: { $0.field == field }) else {
+            return (ObsidianScopedSyncSnapshot.from(recording: recording, note: note), binding)
+        }
+
+        let safeRel = try Self.validateSafeRelativePath(binding.vaultRelativePath)
+        let targetURL = vaultRootURL.appendingPathComponent(safeRel)
+        try verifyCloudDownloaded(fileURL: targetURL, relativePath: safeRel)
+
+        var nextSnap = ObsidianScopedSyncSnapshot.from(recording: recording, note: note)
+        let mSnap = conflict.memoFlowSnapshot
+        let oSnap = conflict.obsidianSnapshot
+
+        switch field {
+        case .userSupplement:
+            switch choice {
+            case .keepObsidianUserVersion:
+                nextSnap.userSupplement = oSnap.userSupplement
+            case .adoptMemoFlowVersion:
+                nextSnap.userSupplement = mSnap.userSupplement
+            case .keepBothMerged:
+                let parts = [oSnap.userSupplement, mSnap.userSupplement].filter { !$0.isEmpty }
+                nextSnap.userSupplement = parts.joined(separator: "\n\n")
+            }
+
+        case .manualTags:
+            switch choice {
+            case .keepObsidianUserVersion:
+                nextSnap.manualTags = oSnap.manualTags
+            case .adoptMemoFlowVersion:
+                nextSnap.manualTags = mSnap.manualTags
+            case .keepBothMerged:
+                nextSnap.manualTags = ObsidianScopedSyncSnapshot.normalizeTags(oSnap.manualTags + mSnap.manualTags)
+            }
+
+        case .projectName:
+            switch choice {
+            case .keepObsidianUserVersion:
+                nextSnap.projectName = oSnap.projectName
+            case .adoptMemoFlowVersion, .keepBothMerged:
+                nextSnap.projectName = mSnap.projectName ?? oSnap.projectName
+            }
+
+        case .marks:
+            switch choice {
+            case .keepObsidianUserVersion:
+                nextSnap.marks = oSnap.marks
+            case .adoptMemoFlowVersion:
+                nextSnap.marks = mSnap.marks
+            case .keepBothMerged:
+                var byId: [UUID: RecordingMark] = [:]
+                for m in oSnap.marks { byId[m.id] = m }
+                for m in mSnap.marks where byId[m.id] == nil { byId[m.id] = m }
+                nextSnap.marks = ObsidianScopedSyncSnapshot.normalizeMarks(Array(byId.values))
+            }
+        }
+
+        var updatedRec = recording
+        updatedRec.marks = nextSnap.marks
+
+        var updatedNote = note
+        updatedNote.userSupplement = nextSnap.userSupplement
+        updatedNote.manualTags = nextSnap.manualTags
+        updatedNote.projectName = nextSnap.projectName
+
+        let newBlocks = MarkdownExporterService.renderManagedBlocks(
+            recording: updatedRec,
+            note: updatedNote,
+            revision: revision,
+            confirmedActions: confirmedActions,
+            segments: segments,
+            pendingDrafts: pendingDrafts
+        )
+
+        var coordError: NSError?
+        var writeResult: Result<ObsidianNoteBinding, Error>?
+
+        NSFileCoordinator().coordinate(writingItemAt: targetURL, options: .forMerging, error: &coordError) { coordinatedURL in
+            writeResult = Result {
+                let rawData = try Data(contentsOf: coordinatedURL)
+                guard let currentText = String(data: rawData, encoding: .utf8) else {
+                    throw ObsidianSyncError.fileOperationFailed("UTF-8 解码失败")
+                }
+
+                let backupURL = try Self.savePreWriteBackup(
+                    originalData: rawData,
+                    recordingId: recording.id,
+                    fileName: coordinatedURL.lastPathComponent,
+                    backupsRootURL: backupsRootURL
+                )
+
+                var alignedBinding = binding
+                let tokens = Self.parseBodyTokens(Self.splitFrontmatterAndBody(currentText).body)
+                for tok in tokens {
+                    if case .managed(let k, let inner) = tok, (k == .marks || k == .header) {
+                        alignedBinding.managedBlockDigests[k.rawValue] = Self.normalizedBlockDigest(inner)
+                    }
+                }
+
+                let merged = Self.mergeExistingMarkdown(
+                    existingMarkdown: currentText,
+                    recording: updatedRec,
+                    note: updatedNote,
+                    revision: revision,
+                    segments: segments,
+                    newBlocks: newBlocks,
+                    existingBinding: alignedBinding,
+                    isAssociatingLegacy: false,
+                    overrideExactUserTags: nextSnap.manualTags,
+                    useExactNoteProject: true,
+                    overrideUserSupplement: nextSnap.userSupplement
+                )
+
+                let outData = Data(merged.markdown.utf8)
+                try outData.write(to: coordinatedURL, options: .atomic)
+                let modDate = (try? coordinatedURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+
+                var remainingScoped = binding.scopedFieldConflicts
+                remainingScoped.removeAll { $0.field == field }
+                let hasAnyConflict = !merged.conflicts.isEmpty || !remainingScoped.isEmpty
+
+                return ObsidianNoteBinding(
+                    recordingId: recording.id,
+                    vaultRelativePath: safeRel,
+                    lastKnownFileName: coordinatedURL.lastPathComponent,
+                    lastExportedRevisionId: revision.id,
+                    lastExportedAt: Date(),
+                    lastSyncedFileSHA256: Self.sha256Hex(of: outData),
+                    lastSyncedModificationDate: modDate,
+                    managedBlockDigests: merged.updatedDigests,
+                    managedBlockSnapshots: merged.updatedSnapshots,
+                    status: hasAnyConflict ? .hasConflict : .synced,
+                    pendingLegacyCandidatePaths: [],
+                    conflicts: merged.conflicts,
+                    lastScopedSnapshot: remainingScoped.isEmpty ? nextSnap : binding.lastScopedSnapshot,
+                    scopedFieldConflicts: remainingScoped,
+                    lastBackupFilePath: backupURL.path,
+                    lastErrorMessage: nil
+                )
+            }
+        }
+
+        if let coordError {
+            throw ObsidianSyncError.fileOperationFailed(coordError.localizedDescription)
+        }
+        guard let writeResult else {
+            throw ObsidianSyncError.fileOperationFailed("字段冲突解决未完成")
+        }
+
+        return (nextSnap, try writeResult.get())
+    }
+
+    // MARK: - P2-7 Cross-Device Audio Attachment & Vault Hydration (iPhone <-> Mac)
+
+    public struct HydratedVaultRecord: Sendable {
+        public let recording: Recording
+        public let note: Note
+        public let revision: NoteRevision
+        public let segments: [TranscriptSegment]
+        public let binding: ObsidianNoteBinding
+    }
+
+    /// 将当前设备原音频作为相对路径附件同步到 Obsidian 笔记库附件目录（避免使用仅 Mac 有效的绝对路径）
+    public func syncAudioAttachmentToVault(
+        localAudioURL: URL,
+        recordingId: UUID,
+        vaultRootURL: URL,
+        attachmentSubfolder: String
+    ) throws -> String {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: localAudioURL.path) else {
+            throw ObsidianSyncError.fileOperationFailed("当前设备不存在本地原音频文件（\(localAudioURL.lastPathComponent)），无法同步到笔记库。")
+        }
+
+        let safeSub = try Self.validateSafeRelativePath(attachmentSubfolder)
+        let ext = localAudioURL.pathExtension.isEmpty ? "m4a" : localAudioURL.pathExtension.lowercased()
+        let attachmentFileName = "rec_\(recordingId.uuidString).\(ext)"
+        let relativeAttachmentPath = "\(safeSub)/\(attachmentFileName)"
+        let destinationURL = vaultRootURL.appendingPathComponent(relativeAttachmentPath)
+
+        try fm.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let sourceData = try Data(contentsOf: localAudioURL)
+        if fm.fileExists(atPath: destinationURL.path),
+           let existingData = try? Data(contentsOf: destinationURL),
+           existingData == sourceData {
+            return relativeAttachmentPath
+        }
+
+        var coordError: NSError?
+        var writeErr: Error?
+        NSFileCoordinator().coordinate(writingItemAt: destinationURL, options: .forReplacing, error: &coordError) { coordinatedURL in
+            do {
+                try sourceData.write(to: coordinatedURL, options: .atomic)
+            } catch {
+                writeErr = error
+            }
+        }
+        if let err = coordError ?? writeErr {
+            throw ObsidianSyncError.fileOperationFailed(err.localizedDescription)
+        }
+        return relativeAttachmentPath
+    }
+
+    /// 检查笔记库附件目录中的跨端音频是否已到达当前设备并完成 iCloud 下载
+    public func inspectVaultAudioAttachment(
+        recording: Recording,
+        vaultRootURL: URL,
+        attachmentSubfolder: String
+    ) -> AudioAvailabilityState? {
+        let fm = FileManager.default
+        var candidateRelPaths: [String] = []
+        if let explicitRel = MarkdownExporterService.sanitizedVaultRelativeAudioPath(recording.vaultAudioRelativePath) {
+            candidateRelPaths.append(explicitRel)
+        }
+        if let cleanSub = try? Self.validateSafeRelativePath(attachmentSubfolder) {
+            if !recording.localAudioFileName.isEmpty {
+                let byLocalName = "\(cleanSub)/\(recording.localAudioFileName)"
+                if !candidateRelPaths.contains(byLocalName) {
+                    candidateRelPaths.append(byLocalName)
+                }
+            }
+            for ext in ["m4a", "wav"] {
+                let byId = "\(cleanSub)/rec_\(recording.id.uuidString).\(ext)"
+                if !candidateRelPaths.contains(byId) {
+                    candidateRelPaths.append(byId)
+                }
+            }
+        }
+
+        for rel in candidateRelPaths {
+            let url = vaultRootURL.appendingPathComponent(rel)
+            let normalizedRel = Self.normalizeRelativePath(rel)
+            if simulatedUndownloadedRelativePaths.contains(normalizedRel) {
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                return .cloudNotDownloaded(relativePath: normalizedRel)
+            }
+            if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+               values.isUbiquitousItem == true,
+               values.ubiquitousItemDownloadingStatus == .notDownloaded {
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                return .cloudNotDownloaded(relativePath: normalizedRel)
+            }
+            if fm.fileExists(atPath: url.path) {
+                return .availableInVaultAttachment(fileURL: url, relativePath: normalizedRel)
+            }
+        }
+        return nil
+    }
+
+    /// 从笔记库扫描另一端（iPhone 或 Mac）已导出的带 `recording_id` 笔记，在本机尚无该录音记录时自动载入跨端记录与相对附件关联
+    public func hydrateMissingRecordingsFromVault(
+        vaultRootURL: URL,
+        preferredSubfolder: String,
+        existingRecordingIds: Set<UUID>
+    ) throws -> [HydratedVaultRecord] {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [
+            .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
+            .fileSizeKey, .ubiquitousItemDownloadingStatusKey, .isUbiquitousItemKey,
+            .contentModificationDateKey
+        ]
+        guard let enumerator = fm.enumerator(
+            at: vaultRootURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, _ in true }
+        ) else {
+            return []
+        }
+
+        var hydrated: [HydratedVaultRecord] = []
+        var seenIds = existingRecordingIds
+
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys) else { continue }
+            if values.isSymbolicLink == true {
+                if values.isDirectory == true { enumerator.skipDescendants() }
+                continue
+            }
+            let relPath = Self.relativePath(of: fileURL, inside: vaultRootURL)
+            if relPath.split(separator: "/").contains(where: { $0.hasPrefix(".") }) {
+                if values.isDirectory == true { enumerator.skipDescendants() }
+                continue
+            }
+            guard fileURL.pathExtension.lowercased() == "md", values.isRegularFile == true else { continue }
+
+            let normalizedRel = Self.normalizeRelativePath(relPath)
+            if simulatedUndownloadedRelativePaths.contains(normalizedRel) ||
+                (values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus == .notDownloaded) {
+                try? fm.startDownloadingUbiquitousItem(at: fileURL)
+                continue
+            }
+
+            guard let data = try? Data(contentsOf: fileURL),
+                  let text = String(data: data, encoding: .utf8),
+                  let recId = Self.extractRecordingId(from: text),
+                  !seenIds.contains(recId) else {
+                continue
+            }
+            seenIds.insert(recId)
+
+            let record = Self.parseHydratedRecord(
+                from: text,
+                rawData: data,
+                recordingId: recId,
+                relativePath: normalizedRel,
+                fileName: fileURL.lastPathComponent,
+                modificationDate: values.contentModificationDate
+            )
+            hydrated.append(record)
+        }
+
+        return hydrated
+    }
+
+    private static func parseHydratedRecord(
+        from markdown: String,
+        rawData: Data,
+        recordingId: UUID,
+        relativePath: String,
+        fileName: String,
+        modificationDate: Date?
+    ) -> HydratedVaultRecord {
+        let (frontmatterLines, body) = splitFrontmatterAndBody(markdown)
+        let yamlMap = parseSimpleYAMLKeyValues(from: frontmatterLines ?? [])
+        let scoped = extractScopedSnapshot(from: markdown, recordingId: recordingId)
+
+        let title = yamlMap["title"]?.isEmpty == false ? yamlMap["title"]! : (fileName as NSString).deletingPathExtension
+        let tzId = yamlMap["timezone"] ?? TimeZone.current.identifier
+        let durationSeconds = Double(yamlMap["duration_seconds"] ?? "") ?? 0
+        let createdAt: Date = {
+            if let isoStr = yamlMap["recorded_at"],
+               let d = ISO8601DateFormatter().date(from: isoStr) {
+                return d
+            }
+            return modificationDate ?? Date()
+        }()
+        let isReviewed = (yamlMap["transcript_review_status"] == "reviewed")
+        let relAudio = MarkdownExporterService.sanitizedVaultRelativeAudioPath(yamlMap["audio_attachment"])
+        let ext = (relAudio as NSString?)?.pathExtension
+        let localFileName = "rec_\(recordingId.uuidString).\(ext?.isEmpty == false ? ext! : "m4a")"
+        let mode: NoteMode = (yamlMap["mode"] == "会议") ? .meetingNote : .quickNote
+
+        let tokens = parseBodyTokens(body)
+        var blockMap: [ObsidianManagedBlockKind: String] = [:]
+        var digests: [String: String] = [:]
+        for tok in tokens {
+            if case .managed(let kind, let inner) = tok {
+                blockMap[kind] = inner
+                digests[kind.rawValue] = normalizedBlockDigest(inner)
+            }
+        }
+
+        let summaryRaw = blockMap[.summary] ?? ""
+        let cleanedSummary = summaryRaw
+            .components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("## ") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let segments = parseHydratedSegments(from: blockMap[.transcript] ?? "", recordingId: recordingId, fallbackDurationMs: Int(durationSeconds * 1000))
+
+        var rec = Recording(
+            id: recordingId,
+            title: title,
+            createdAt: createdAt,
+            recordedTimeZoneIdentifier: tzId,
+            duration: durationSeconds,
+            localAudioFileName: localFileName,
+            processingStatus: .completed,
+            isTranscriptReviewed: isReviewed,
+            vaultAudioRelativePath: relAudio
+        )
+        rec.marks = scoped.marks
+
+        let revId = UUID()
+        let noteId = UUID()
+        let note = Note(
+            id: noteId,
+            recordingId: recordingId,
+            mode: mode,
+            projectName: scoped.projectName,
+            userSupplement: scoped.userSupplement,
+            manualTags: scoped.manualTags,
+            editedAt: createdAt,
+            currentRevisionId: revId
+        )
+
+        let structured = StructuredNoteContent(
+            suggestedTitle: title,
+            summaryOrShortNote: cleanedSummary.isEmpty ? title : cleanedSummary
+        )
+        let revision = NoteRevision(
+            id: revId,
+            noteId: noteId,
+            mode: mode,
+            generatedAt: createdAt,
+            content: structured,
+            origin: .ai,
+            sourceTranscriptDigest: NoteVersionProvenance.transcriptDigest(for: segments),
+            basedOnTranscriptReviewed: isReviewed
+        )
+
+        let snapshotsByKey = Dictionary(uniqueKeysWithValues: blockMap.map { ($0.key.rawValue, $0.value) })
+        let binding = ObsidianNoteBinding(
+            recordingId: recordingId,
+            vaultRelativePath: relativePath,
+            lastKnownFileName: fileName,
+            lastExportedRevisionId: revId,
+            lastExportedAt: modificationDate ?? Date(),
+            lastSyncedFileSHA256: sha256Hex(of: rawData),
+            lastSyncedModificationDate: modificationDate,
+            managedBlockDigests: digests,
+            managedBlockSnapshots: snapshotsByKey,
+            status: .synced,
+            lastScopedSnapshot: scoped,
+            scopedFieldConflicts: []
+        )
+
+        return HydratedVaultRecord(
+            recording: rec,
+            note: note,
+            revision: revision,
+            segments: segments,
+            binding: binding
+        )
+    }
+
+    private static func parseSimpleYAMLKeyValues(from lines: [String]) -> [String: String] {
+        var map: [String: String] = [:]
+        for line in lines {
+            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), let colon = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
+            var val = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            if (val.hasPrefix("\"") && val.hasSuffix("\"")) || (val.hasPrefix("'") && val.hasSuffix("'")) {
+                val = String(val.dropFirst().dropLast())
+            }
+            map[key] = val
+        }
+        return map
+    }
+
+    private static func parseHydratedSegments(
+        from transcriptBlock: String,
+        recordingId: UUID,
+        fallbackDurationMs: Int
+    ) -> [TranscriptSegment] {
+        let lines = transcriptBlock.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var segments: [TranscriptSegment] = []
+        let lineRegex = try? NSRegularExpression(
+            pattern: #"^-\s*\[([^\]]+)\](?:\([^)]*\))?\s*(?:\*\*([^*]+)\*\*:\s*)?(.*)$"#
+        )
+
+        for (index, rawLine) in lines.enumerated() {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("- ") else { continue }
+            guard let regex = lineRegex,
+                  let m = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)),
+                  let labelRange = Range(m.range(at: 1), in: trimmed),
+                  let textRange = Range(m.range(at: 3), in: trimmed) else {
+                continue
+            }
+            let label = String(trimmed[labelRange])
+            let speaker: String? = (m.range(at: 2).location != NSNotFound)
+                ? Range(m.range(at: 2), in: trimmed).map { String(trimmed[$0]) }
+                : nil
+            let text = String(trimmed[textRange]).trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { continue }
+
+            let startMs = parseTimestampMs(fromLabel: label) ?? (index * 5000)
+            let endMs = max(startMs + 2000, min(max(startMs + 5000, fallbackDurationMs), startMs + 5000))
+            let isEst = label.contains("约")
+
+            segments.append(
+                TranscriptSegment(
+                    id: "hydrated_\(recordingId.uuidString)_\(index)",
+                    recordingId: recordingId,
+                    startMs: startMs,
+                    endMs: endMs,
+                    text: text,
+                    speakerName: speaker,
+                    timingIsEstimated: isEst ? true : nil
+                )
+            )
+        }
+        return segments
     }
 }

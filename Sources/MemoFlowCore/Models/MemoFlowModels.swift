@@ -245,6 +245,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
     public var marks: [RecordingMark]?
     /// 逐字稿是否已由用户人工听校确认（nil 或 false 均视为尚未人工审核的机器稿/历史稿，P1-4）
     public var isTranscriptReviewed: Bool?
+    /// P2-7：可选保存在 Obsidian 笔记库附件目录中的相对路径（如 "MemoFlow笔记/Attachments/rec_<UUID>.m4a"，严禁写入仅 Mac 有效的绝对路径）
+    public var vaultAudioRelativePath: String?
 
     public init(
         id: UUID = UUID(),
@@ -257,7 +259,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         processingStatus: RecordingProcessingStatus = .savedPendingTranscription,
         failureReason: String? = nil,
         audioInterruptionNote: String? = nil,
-        isTranscriptReviewed: Bool? = nil
+        isTranscriptReviewed: Bool? = nil,
+        vaultAudioRelativePath: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -270,6 +273,7 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         self.failureReason = failureReason
         self.audioInterruptionNote = audioInterruptionNote
         self.isTranscriptReviewed = isTranscriptReviewed
+        self.vaultAudioRelativePath = vaultAudioRelativePath
     }
 
     public var recordedTimeZone: TimeZone {
@@ -371,12 +375,22 @@ public struct RecordingMark: Identifiable, Codable, Equatable, Sendable {
     public var kind: String
     public var createdAt: Date = Date()
 
-    public init(startMs: Int, endMs: Int? = nil, quote: String = "", note: String = "", kind: String = "bookmark") {
+    public init(
+        id: UUID = UUID(),
+        startMs: Int,
+        endMs: Int? = nil,
+        quote: String = "",
+        note: String = "",
+        kind: String = "bookmark",
+        createdAt: Date = Date()
+    ) {
+        self.id = id
         self.startMs = startMs
         self.endMs = endMs
         self.quote = quote
         self.note = note
         self.kind = kind
+        self.createdAt = createdAt
     }
 }
 
@@ -940,6 +954,133 @@ public enum ObsidianNoteBindingStatus: String, Codable, Equatable, Sendable {
     }
 }
 
+/// P2-6：第一轮有限双向同步支持的四个受控字段
+public enum ObsidianScopedField: String, Codable, CaseIterable, Sendable {
+    case userSupplement = "user_supplement"
+    case manualTags = "manual_tags"
+    case projectName = "project_name"
+    case marks = "marks"
+
+    public var displayTitle: String {
+        switch self {
+        case .userSupplement: return "个人补充"
+        case .manualTags: return "手动标签"
+        case .projectName: return "关联项目"
+        case .marks: return "高亮、批注与书签"
+        }
+    }
+}
+
+/// P2-6：有限字段双向同步的三方比较基准快照
+public struct ObsidianScopedSyncSnapshot: Codable, Equatable, Sendable {
+    public var userSupplement: String
+    public var manualTags: [String]
+    public var projectName: String?
+    public var marks: [RecordingMark]
+
+    public init(
+        userSupplement: String = "",
+        manualTags: [String] = [],
+        projectName: String? = nil,
+        marks: [RecordingMark] = []
+    ) {
+        self.userSupplement = Self.normalizeSupplement(userSupplement)
+        self.manualTags = Self.normalizeTags(manualTags)
+        self.projectName = Self.normalizeProject(projectName)
+        self.marks = Self.normalizeMarks(marks)
+    }
+
+    public static func from(recording: Recording, note: Note) -> ObsidianScopedSyncSnapshot {
+        ObsidianScopedSyncSnapshot(
+            userSupplement: note.userSupplement,
+            manualTags: note.manualTags,
+            projectName: note.projectName,
+            marks: recording.marks ?? []
+        )
+    }
+
+    public static func normalizeSupplement(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func normalizeTags(_ tags: [String]) -> [String] {
+        let systemTags: Set<String> = ["录音笔记", "随手记", "会议", "会议记"]
+        var result: [String] = []
+        for tag in tags {
+            let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            if !cleaned.isEmpty && !systemTags.contains(cleaned) && !result.contains(cleaned) {
+                result.append(cleaned)
+            }
+        }
+        return result.sorted()
+    }
+
+    public static func normalizeProject(_ raw: String?) -> String? {
+        guard var val = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !val.isEmpty else {
+            return nil
+        }
+        if (val.hasPrefix("\"") && val.hasSuffix("\"")) || (val.hasPrefix("'") && val.hasSuffix("'")) {
+            val = String(val.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if val.hasPrefix("[[") && val.hasSuffix("]]") {
+            val = String(val.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let pipeIdx = val.firstIndex(of: "|") {
+            val = String(val[..<pipeIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return val.isEmpty ? nil : val
+    }
+
+    public static func normalizeMarks(_ marks: [RecordingMark]) -> [RecordingMark] {
+        let canonicalEpoch = Date(timeIntervalSince1970: 0)
+        return marks.map { m in
+            RecordingMark(
+                id: m.id,
+                startMs: max(0, m.startMs),
+                endMs: m.endMs,
+                quote: m.quote.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: m.note.trimmingCharacters(in: .whitespacesAndNewlines),
+                kind: m.kind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "bookmark" : m.kind,
+                createdAt: canonicalEpoch
+            )
+        }.sorted {
+            if $0.startMs != $1.startMs { return $0.startMs < $1.startMs }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+}
+
+/// P2-6：当 MemoFlow 与 Obsidian 同时修改了同一个有限同步字段时的待确认冲突记录
+public struct ObsidianScopedFieldConflict: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var field: ObsidianScopedField
+    public var detectedAt: Date
+    public var memoFlowSummary: String
+    public var obsidianSummary: String
+    public var memoFlowSnapshot: ObsidianScopedSyncSnapshot
+    public var obsidianSnapshot: ObsidianScopedSyncSnapshot
+
+    public init(
+        id: UUID = UUID(),
+        field: ObsidianScopedField,
+        detectedAt: Date = Date(),
+        memoFlowSummary: String,
+        obsidianSummary: String,
+        memoFlowSnapshot: ObsidianScopedSyncSnapshot,
+        obsidianSnapshot: ObsidianScopedSyncSnapshot
+    ) {
+        self.id = id
+        self.field = field
+        self.detectedAt = detectedAt
+        self.memoFlowSummary = memoFlowSummary
+        self.obsidianSummary = obsidianSummary
+        self.memoFlowSnapshot = memoFlowSnapshot
+        self.obsidianSnapshot = obsidianSnapshot
+    }
+}
+
 /// 录音与单篇 Obsidian 笔记的稳定绑定记录（基于 recording_id + 相对路径）
 public struct ObsidianNoteBinding: Codable, Equatable, Sendable {
     public var recordingId: UUID
@@ -954,6 +1095,8 @@ public struct ObsidianNoteBinding: Codable, Equatable, Sendable {
     public var status: ObsidianNoteBindingStatus
     public var pendingLegacyCandidatePaths: [String]
     public var conflicts: [ObsidianBlockConflict]
+    public var lastScopedSnapshot: ObsidianScopedSyncSnapshot?
+    public var scopedFieldConflicts: [ObsidianScopedFieldConflict]
     public var lastBackupFilePath: String?
     public var lastErrorMessage: String?
 
@@ -970,6 +1113,8 @@ public struct ObsidianNoteBinding: Codable, Equatable, Sendable {
         status: ObsidianNoteBindingStatus = .synced,
         pendingLegacyCandidatePaths: [String] = [],
         conflicts: [ObsidianBlockConflict] = [],
+        lastScopedSnapshot: ObsidianScopedSyncSnapshot? = nil,
+        scopedFieldConflicts: [ObsidianScopedFieldConflict] = [],
         lastBackupFilePath: String? = nil,
         lastErrorMessage: String? = nil
     ) {
@@ -985,8 +1130,97 @@ public struct ObsidianNoteBinding: Codable, Equatable, Sendable {
         self.status = status
         self.pendingLegacyCandidatePaths = pendingLegacyCandidatePaths
         self.conflicts = conflicts
+        self.lastScopedSnapshot = lastScopedSnapshot
+        self.scopedFieldConflicts = scopedFieldConflicts
         self.lastBackupFilePath = lastBackupFilePath
         self.lastErrorMessage = lastErrorMessage
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.recordingId = try c.decode(UUID.self, forKey: .recordingId)
+        self.vaultRelativePath = try c.decodeIfPresent(String.self, forKey: .vaultRelativePath) ?? ""
+        self.lastKnownFileName = try c.decodeIfPresent(String.self, forKey: .lastKnownFileName) ?? ""
+        self.lastExportedRevisionId = try c.decodeIfPresent(UUID.self, forKey: .lastExportedRevisionId)
+        self.lastExportedAt = try c.decodeIfPresent(Date.self, forKey: .lastExportedAt)
+        self.lastSyncedFileSHA256 = try c.decodeIfPresent(String.self, forKey: .lastSyncedFileSHA256)
+        self.lastSyncedModificationDate = try c.decodeIfPresent(Date.self, forKey: .lastSyncedModificationDate)
+        self.managedBlockDigests = try c.decodeIfPresent([String: String].self, forKey: .managedBlockDigests) ?? [:]
+        self.managedBlockSnapshots = try c.decodeIfPresent([String: String].self, forKey: .managedBlockSnapshots) ?? [:]
+        self.status = try c.decodeIfPresent(ObsidianNoteBindingStatus.self, forKey: .status) ?? .synced
+        self.pendingLegacyCandidatePaths = try c.decodeIfPresent([String].self, forKey: .pendingLegacyCandidatePaths) ?? []
+        self.conflicts = try c.decodeIfPresent([ObsidianBlockConflict].self, forKey: .conflicts) ?? []
+        self.lastScopedSnapshot = try c.decodeIfPresent(ObsidianScopedSyncSnapshot.self, forKey: .lastScopedSnapshot)
+        self.scopedFieldConflicts = try c.decodeIfPresent([ObsidianScopedFieldConflict].self, forKey: .scopedFieldConflicts) ?? []
+        self.lastBackupFilePath = try c.decodeIfPresent(String.self, forKey: .lastBackupFilePath)
+        self.lastErrorMessage = try c.decodeIfPresent(String.self, forKey: .lastErrorMessage)
+    }
+}
+
+/// P2-7：当前设备上某条录音的音频可用性与跨端同步状态（严格独立于「笔记已同步」状态）
+public enum AudioAvailabilityState: Equatable, Sendable {
+    case availableLocal(fileURL: URL, alsoSyncedInVault: Bool)
+    case availableInVaultAttachment(fileURL: URL, relativePath: String)
+    case cloudNotDownloaded(relativePath: String)
+    case missingOnCurrentDevice(reason: String)
+
+    public var isPlayableNow: Bool {
+        switch self {
+        case .availableLocal, .availableInVaultAttachment:
+            return true
+        case .cloudNotDownloaded, .missingOnCurrentDevice:
+            return false
+        }
+    }
+
+    public var isAudioSyncedAcrossDevices: Bool {
+        switch self {
+        case .availableLocal(_, let alsoSynced):
+            return alsoSynced
+        case .availableInVaultAttachment, .cloudNotDownloaded:
+            return true
+        case .missingOnCurrentDevice:
+            return false
+        }
+    }
+
+    public var badgeTitle: String {
+        switch self {
+        case .availableLocal(_, let alsoSynced):
+            return alsoSynced ? "音频已同步（本机+笔记库）" : "音频仅本机可用"
+        case .availableInVaultAttachment:
+            return "音频已同步（笔记库附件可播）"
+        case .cloudNotDownloaded:
+            return "音频已同步 · 待 iCloud 下载"
+        case .missingOnCurrentDevice:
+            return "音频未到达当前设备"
+        }
+    }
+
+    public var detailMessage: String? {
+        switch self {
+        case .availableLocal(_, let alsoSynced):
+            return alsoSynced ? nil : "当前音频仅保存在本机。如需在另一台设备（iPhone / Mac）回听，可点击同步音频副本到笔记库附件目录。"
+        case .availableInVaultAttachment(_, let relPath):
+            return "正在通过笔记库相对附件（\(relPath)）跨端回听，也可一键缓存到本机录音目录。"
+        case .cloudNotDownloaded(let relPath):
+            return "音频附件（\(relPath)）已记录在笔记库，但 iCloud 尚未下载到当前设备。"
+        case .missingOnCurrentDevice(let reason):
+            return reason
+        }
+    }
+}
+
+/// P2-7：明确区分「笔记同步状态」与「音频同步/可用状态」的双轨状态概览
+public struct NoteAndAudioSyncOverview: Equatable, Sendable {
+    public let isNoteSynced: Bool
+    public let noteBadgeTitle: String
+    public let audioState: AudioAvailabilityState
+
+    public init(isNoteSynced: Bool, noteBadgeTitle: String, audioState: AudioAvailabilityState) {
+        self.isNoteSynced = isNoteSynced
+        self.noteBadgeTitle = noteBadgeTitle
+        self.audioState = audioState
     }
 }
 

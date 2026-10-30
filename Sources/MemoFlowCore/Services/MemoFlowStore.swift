@@ -940,7 +940,7 @@ public final class MemoFlowStore: ObservableObject {
         for recordingId: UUID,
         legacyResolution: ObsidianLegacyResolution = .requireUserConfirmation
     ) throws -> (fileURL: URL, obsidianOpenURL: URL?) {
-        guard let rec = recordings.first(where: { $0.id == recordingId }),
+        guard let recIdx = recordings.firstIndex(where: { $0.id == recordingId }),
               let note = notesByRecording[recordingId],
               let rev = currentRevision(for: recordingId) else {
             throw NSError(domain: "MemoFlowObsidian", code: 404, userInfo: [NSLocalizedDescriptionKey: "未找到可导出的笔记版本，请先完成转写整理。"])
@@ -956,6 +956,34 @@ public final class MemoFlowStore: ObservableObject {
             let accessed = root.startAccessingSecurityScopedResource()
             defer { if accessed { root.stopAccessingSecurityScopedResource() } }
 
+            // P2-7：若开启「同步音频副本到笔记库附件目录」且本机存在原音频，先同步相对路径附件（严禁导出仅本机有效的绝对路径）
+            if preferences.audioSyncMode == .vaultAttachmentCopy {
+                let candidateRec = recordings[recIdx]
+                let localAudioURL: URL? = {
+                    if candidateRec.localAudioFileName.hasPrefix("demo_") {
+                        return audioService.ensurePlayableDemoAudioFile(
+                            named: candidateRec.localAudioFileName,
+                            durationSeconds: max(5.0, candidateRec.duration)
+                        )
+                    }
+                    guard !candidateRec.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        return nil
+                    }
+                    let u = audioService.audioFileURL(for: candidateRec.localAudioFileName)
+                    return FileManager.default.fileExists(atPath: u.path) ? u : nil
+                }()
+                if let localAudioURL,
+                   let relAudioPath = try? obsidianSyncService.syncAudioAttachmentToVault(
+                       localAudioURL: localAudioURL,
+                       recordingId: recordingId,
+                       vaultRootURL: root,
+                       attachmentSubfolder: preferences.obsidianAudioAttachmentSubfolder
+                   ) {
+                    recordings[recIdx].vaultAudioRelativePath = relAudioPath
+                }
+            }
+
+            let rec = recordings[recIdx]
             let outcome = try obsidianSyncService.exportOrUpdateNote(
                 recording: rec,
                 note: note,
@@ -1199,7 +1227,7 @@ public final class MemoFlowStore: ObservableObject {
         throw ObsidianSyncError.fileOperationFailed("未在 Obsidian 库中找到该录音对应的笔记，请先点击导出创建或重新写入。")
     }
 
-    /// 处理从 Obsidian 点击 `memoflow://recording/<UUID>?startMs=...` 打开应用或前台跳转（覆盖缺失录音、时间越界夹逼与冷启动导航）
+    /// 处理从 Obsidian 点击 `memoflow://recording/<UUID>?startMs=...` 打开应用或前台跳转（覆盖跨端自动载入、缺失录音、时间越界夹逼与冷启动导航）
     @discardableResult
     public func handleIncomingURL(_ url: URL) -> DeepLinkOutcome {
         guard let link = MemoFlowDeepLink.parse(url) else {
@@ -1207,6 +1235,10 @@ public final class MemoFlowStore: ObservableObject {
             activeDeepLinkAlert = msg
             lastBannerFeedback = msg
             return .invalidURL(url.absoluteString)
+        }
+
+        if recordings.first(where: { $0.id == link.recordingId }) == nil {
+            _ = try? hydrateMissingRecordingsFromVault()
         }
 
         guard let recording = recordings.first(where: { $0.id == link.recordingId }) else {
@@ -1246,8 +1278,8 @@ public final class MemoFlowStore: ObservableObject {
             isEstimated: link.isEstimated
         )
 
-        let played = audioService.play(
-            recording: recording,
+        let played = playRecording(
+            recording,
             startMs: targetStartMs ?? 0,
             endMs: targetEndMs
         )
@@ -1272,6 +1304,456 @@ public final class MemoFlowStore: ObservableObject {
             lastBannerFeedback = "已打开录音《\(recording.title)》"
         }
         return .opened(recordingId: recording.id, targetMs: targetStartMs, isEstimated: link.isEstimated)
+    }
+
+    // MARK: - P2-6 Bidirectional Scoped Sync (userSupplement, manualTags, projectName, marks)
+
+    public func updateManualTags(for recordingId: UUID, tags: [String]) {
+        guard var note = notesByRecording[recordingId] else { return }
+        note.manualTags = ObsidianScopedSyncSnapshot.normalizeTags(tags)
+        note.editedAt = Date()
+        notesByRecording[recordingId] = note
+        saveToDisk()
+    }
+
+    @discardableResult
+    public func syncScopedFieldsWithObsidian(for recordingId: UUID) throws -> ObsidianNoteSyncService.ScopedReconcileOutcome? {
+        guard let recIdx = recordings.firstIndex(where: { $0.id == recordingId }),
+              let note = notesByRecording[recordingId],
+              let rev = currentRevision(for: recordingId),
+              let existingBinding = obsidianBindingsByRecording[recordingId] else {
+            return nil
+        }
+
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let confirmed = confirmedActionsByRecording[recordingId] ?? []
+        let segs = segmentsByRecording[recordingId] ?? []
+        let pending = actionDraftsByRecording[recordingId] ?? []
+
+        let outcome = try obsidianSyncService.reconcileScopedFields(
+            recording: recordings[recIdx],
+            note: note,
+            revision: rev,
+            confirmedActions: confirmed,
+            segments: segs,
+            pendingDrafts: pending,
+            vaultRootURL: root,
+            targetSubfolder: preferences.obsidianTargetSubfolder,
+            existingBinding: existingBinding,
+            backupsRootURL: obsidianBackupsDirectoryURL
+        )
+
+        var updatedNote = note
+        var noteMutated = false
+        if let supp = outcome.updatedUserSupplement {
+            updatedNote.userSupplement = supp
+            noteMutated = true
+        }
+        if let tags = outcome.updatedManualTags {
+            updatedNote.manualTags = tags
+            noteMutated = true
+        }
+        if outcome.shouldUpdateProjectName {
+            updatedNote.projectName = outcome.updatedProjectName
+            if let validProj = outcome.updatedProjectName, !preferences.knownProjectNames.contains(validProj) {
+                preferences.knownProjectNames.append(validProj)
+            }
+            noteMutated = true
+        }
+        if noteMutated {
+            updatedNote.editedAt = Date()
+            notesByRecording[recordingId] = updatedNote
+        }
+
+        if let pulledMarks = outcome.updatedMarks,
+           let latestIdx = recordings.firstIndex(where: { $0.id == recordingId }) {
+            let existingById = Dictionary(uniqueKeysWithValues: (recordings[latestIdx].marks ?? []).map { ($0.id, $0) })
+            recordings[latestIdx].marks = pulledMarks.map { m in
+                RecordingMark(
+                    id: m.id,
+                    startMs: m.startMs,
+                    endMs: m.endMs,
+                    quote: m.quote,
+                    note: m.note,
+                    kind: m.kind,
+                    createdAt: existingById[m.id]?.createdAt ?? Date()
+                )
+            }
+        }
+
+        if let pulledAudioRel = outcome.updatedVaultAudioRelativePath,
+           let latestIdx = recordings.firstIndex(where: { $0.id == recordingId }) {
+            recordings[latestIdx].vaultAudioRelativePath = pulledAudioRel
+        }
+
+        let bindingChanged = (obsidianBindingsByRecording[recordingId] != outcome.binding)
+        obsidianBindingsByRecording[recordingId] = outcome.binding
+
+        if outcome.noteWasDeletedInVault {
+            lastBannerFeedback = "Obsidian 中的对应笔记已被移除；原音频与本地记录完好保留，可随时重新导出。"
+        } else if !outcome.binding.scopedFieldConflicts.isEmpty {
+            lastBannerFeedback = "检测到 \(outcome.binding.scopedFieldConflicts.count) 项字段双方同时修改冲突，请在详情页选择保留版本。"
+        } else if let oldRel = outcome.relocatedFromOldPath {
+            lastBannerFeedback = "已跟随重命名/移动重定位笔记（\(oldRel) → \(outcome.binding.vaultRelativePath)）并完成双向同步。"
+        } else if outcome.didPullToMemoFlow && outcome.didWriteToDisk {
+            lastBannerFeedback = "已完成双向字段同步（Obsidian ⇄ MemoFlow）。"
+        } else if outcome.didPullToMemoFlow {
+            lastBannerFeedback = "已将 Obsidian 中的修改同步回 MemoFlow。"
+        } else if outcome.didWriteToDisk {
+            lastBannerFeedback = "已将 MemoFlow 字段修改同步至 Obsidian 笔记。"
+        }
+
+        if noteMutated || outcome.updatedMarks != nil || outcome.updatedVaultAudioRelativePath != nil || bindingChanged || outcome.didWriteToDisk {
+            saveToDisk()
+        }
+        return outcome
+    }
+
+    public func resolveScopedFieldConflict(
+        for recordingId: UUID,
+        field: ObsidianScopedField,
+        choice: ObsidianConflictResolutionChoice
+    ) throws {
+        guard let recIdx = recordings.firstIndex(where: { $0.id == recordingId }),
+              var note = notesByRecording[recordingId],
+              let rev = currentRevision(for: recordingId),
+              let binding = obsidianBindingsByRecording[recordingId] else {
+            return
+        }
+
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let confirmed = confirmedActionsByRecording[recordingId] ?? []
+        let segs = segmentsByRecording[recordingId] ?? []
+        let pending = actionDraftsByRecording[recordingId] ?? []
+
+        let result = try obsidianSyncService.resolveScopedFieldConflict(
+            field: field,
+            choice: choice,
+            recording: recordings[recIdx],
+            note: note,
+            revision: rev,
+            confirmedActions: confirmed,
+            segments: segs,
+            pendingDrafts: pending,
+            vaultRootURL: root,
+            binding: binding,
+            backupsRootURL: obsidianBackupsDirectoryURL
+        )
+
+        note.userSupplement = result.resolvedSnapshot.userSupplement
+        note.manualTags = result.resolvedSnapshot.manualTags
+        note.projectName = result.resolvedSnapshot.projectName
+        if let validProj = note.projectName, !preferences.knownProjectNames.contains(validProj) {
+            preferences.knownProjectNames.append(validProj)
+        }
+        note.editedAt = Date()
+        notesByRecording[recordingId] = note
+
+        let existingById = Dictionary(uniqueKeysWithValues: (recordings[recIdx].marks ?? []).map { ($0.id, $0) })
+        recordings[recIdx].marks = result.resolvedSnapshot.marks.map { m in
+            RecordingMark(
+                id: m.id,
+                startMs: m.startMs,
+                endMs: m.endMs,
+                quote: m.quote,
+                note: m.note,
+                kind: m.kind,
+                createdAt: existingById[m.id]?.createdAt ?? Date()
+            )
+        }
+
+        obsidianBindingsByRecording[recordingId] = result.binding
+        lastBannerFeedback = "已处理「\(field.displayTitle)」双向同步冲突（\(choice.displayTitle)）。"
+        saveToDisk()
+    }
+
+    @discardableResult
+    public func syncAllBoundObsidianNotes(hydrateNewFromVault: Bool = true) -> Int {
+        guard (try? ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)) != nil else {
+            return 0
+        }
+        var touchedCount = 0
+        if hydrateNewFromVault, let hydrated = try? hydrateMissingRecordingsFromVault() {
+            touchedCount += hydrated
+        }
+        let boundIds = Array(obsidianBindingsByRecording.keys)
+        for recId in boundIds {
+            guard let b = obsidianBindingsByRecording[recId],
+                  !b.vaultRelativePath.isEmpty,
+                  b.status != .missingInVault else {
+                continue
+            }
+            if let outcome = try? syncScopedFieldsWithObsidian(for: recId),
+               (outcome.didPullToMemoFlow || outcome.didWriteToDisk || outcome.noteWasDeletedInVault || outcome.relocatedFromOldPath != nil || !outcome.binding.scopedFieldConflicts.isEmpty) {
+                touchedCount += 1
+            }
+        }
+        if touchedCount == 0 && hydrateNewFromVault {
+            lastBannerFeedback = "Obsidian 笔记库双向对账完成，所有绑定字段均已是最新状态。"
+        }
+        return touchedCount
+    }
+
+    // MARK: - P2-7 Cross-Device Audio Availability (iPhone <-> Mac)
+
+    private func inspectVaultAttachmentStateIfAuthorized(for recording: Recording) -> AudioAvailabilityState? {
+        guard let root = try? ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences) else {
+            return nil
+        }
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+        return obsidianSyncService.inspectVaultAudioAttachment(
+            recording: recording,
+            vaultRootURL: root,
+            attachmentSubfolder: preferences.obsidianAudioAttachmentSubfolder
+        )
+    }
+
+    /// 评估当前设备上某条录音的音频可用性与跨端同步状态（严格区分「笔记已同步」与「音频已同步」）
+    public func audioAvailability(for recording: Recording) -> AudioAvailabilityState {
+        let vaultState = inspectVaultAttachmentStateIfAuthorized(for: recording)
+        let alsoSyncedInVault = vaultState?.isAudioSyncedAcrossDevices ?? (MarkdownExporterService.sanitizedVaultRelativeAudioPath(recording.vaultAudioRelativePath) != nil)
+
+        if recording.localAudioFileName.hasPrefix("demo_") {
+            let demoURL = audioService.ensurePlayableDemoAudioFile(
+                named: recording.localAudioFileName,
+                durationSeconds: max(5.0, recording.duration)
+            )
+            return .availableLocal(fileURL: demoURL, alsoSyncedInVault: alsoSyncedInVault)
+        }
+
+        let trimmedLocal = recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLocal.isEmpty {
+            let localURL = audioService.audioFileURL(for: trimmedLocal)
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                return .availableLocal(fileURL: localURL, alsoSyncedInVault: alsoSyncedInVault)
+            }
+        }
+
+        if let vaultState {
+            return vaultState
+        }
+
+        let binding = obsidianBindingsByRecording[recording.id]
+        let isNoteSynced = binding != nil && binding?.status != .missingInVault && !(binding?.vaultRelativePath.isEmpty ?? true)
+        if isNoteSynced {
+            return .missingOnCurrentDevice(
+                reason: "笔记已同步到当前设备，但原音频尚未到达（原录制设备未同步音频附件，或附件尚未完成同步）。可在原设备点击「同步音频副本到笔记库」，或在本机手动选择音频文件绑定。"
+            )
+        } else {
+            return .missingOnCurrentDevice(
+                reason: "当前设备未找到原音频文件（\(recording.localAudioFileName)）。"
+            )
+        }
+    }
+
+    public func syncOverview(for recording: Recording) -> NoteAndAudioSyncOverview {
+        let binding = obsidianBindingsByRecording[recording.id]
+        let isNoteSynced = binding != nil && binding?.status != .missingInVault && !(binding?.vaultRelativePath.isEmpty ?? true)
+        let noteBadge: String
+        if let binding {
+            noteBadge = (binding.status == .synced) ? "笔记已同步" : binding.status.displayTitle
+        } else {
+            noteBadge = "笔记未同步"
+        }
+        return NoteAndAudioSyncOverview(
+            isNoteSynced: isNoteSynced,
+            noteBadgeTitle: noteBadge,
+            audioState: audioAvailability(for: recording)
+        )
+    }
+
+    @discardableResult
+    public func playRecording(_ recording: Recording, startMs: Int = 0, endMs: Int? = nil) -> Bool {
+        switch audioAvailability(for: recording) {
+        case .availableLocal(let fileURL, _):
+            return audioService.play(recording: recording, startMs: startMs, endMs: endMs, overrideFileURL: fileURL)
+
+        case .availableInVaultAttachment(let fileURL, let relPath):
+            if let idx = recordings.firstIndex(where: { $0.id == recording.id }),
+               recordings[idx].vaultAudioRelativePath != relPath {
+                recordings[idx].vaultAudioRelativePath = relPath
+                saveToDisk()
+            }
+            return audioService.play(recording: recording, startMs: startMs, endMs: endMs, overrideFileURL: fileURL)
+
+        case .cloudNotDownloaded(let relPath):
+            requestCloudAudioDownload(for: recording.id)
+            let msg = "笔记已同步，音频附件（\(relPath)）正在等待 iCloud 下载，下载完成后即可回听。"
+            audioService.lastPlaybackError = msg
+            lastBannerFeedback = msg
+            return false
+
+        case .missingOnCurrentDevice(let reason):
+            audioService.lastPlaybackError = reason
+            lastBannerFeedback = reason
+            return false
+        }
+    }
+
+    public func togglePlayPauseRecording(_ recording: Recording) {
+        if audioService.playingRecordingId == recording.id {
+            audioService.togglePlayPause(for: recording)
+        } else {
+            _ = playRecording(recording, startMs: 0, endMs: nil)
+        }
+    }
+
+    public func seekRecording(_ recording: Recording, toMs: Int) {
+        if audioService.playingRecordingId == recording.id {
+            audioService.seek(for: recording, toMs: toMs)
+        } else {
+            _ = playRecording(recording, startMs: toMs, endMs: nil)
+        }
+    }
+
+    /// 将当前设备上的原音频复制一份到 Obsidian 笔记库相对附件目录，并刷新绑定笔记中的相对引用
+    @discardableResult
+    public func syncAudioAttachmentToVault(for recordingId: UUID, refreshBoundNote: Bool = true) throws -> String {
+        guard let idx = recordings.firstIndex(where: { $0.id == recordingId }) else {
+            throw ObsidianSyncError.fileOperationFailed("未找到对应录音记录。")
+        }
+        let rec = recordings[idx]
+        let localAudioURL: URL
+        if rec.localAudioFileName.hasPrefix("demo_") {
+            localAudioURL = audioService.ensurePlayableDemoAudioFile(
+                named: rec.localAudioFileName,
+                durationSeconds: max(5.0, rec.duration)
+            )
+        } else {
+            localAudioURL = audioService.audioFileURL(for: rec.localAudioFileName)
+        }
+
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        let relPath: String
+        do {
+            relPath = try obsidianSyncService.syncAudioAttachmentToVault(
+                localAudioURL: localAudioURL,
+                recordingId: recordingId,
+                vaultRootURL: root,
+                attachmentSubfolder: preferences.obsidianAudioAttachmentSubfolder
+            )
+            if accessed { root.stopAccessingSecurityScopedResource() }
+        } catch {
+            if accessed { root.stopAccessingSecurityScopedResource() }
+            throw error
+        }
+
+        recordings[idx].vaultAudioRelativePath = relPath
+        saveToDisk()
+
+        if refreshBoundNote,
+           obsidianBindingsByRecording[recordingId] != nil,
+           notesByRecording[recordingId] != nil {
+            _ = try? saveNoteDirectlyToObsidian(for: recordingId)
+        }
+        lastBannerFeedback = "已同步音频副本到笔记库附件（\(relPath)），另一端同步后即可直接回听。"
+        return relPath
+    }
+
+    /// 在另一台设备上将笔记库中的音频附件缓存到本机录音目录，支持本机离线回听与重新转写
+    @discardableResult
+    public func cacheVaultAudioToLocal(for recordingId: UUID) throws -> URL {
+        guard let idx = recordings.firstIndex(where: { $0.id == recordingId }) else {
+            throw ObsidianSyncError.fileOperationFailed("未找到对应录音记录。")
+        }
+        let rec = recordings[idx]
+        switch audioAvailability(for: rec) {
+        case .availableLocal(let fileURL, _):
+            return fileURL
+        case .availableInVaultAttachment(let vaultFileURL, let relPath):
+            let ext = vaultFileURL.pathExtension.isEmpty ? "m4a" : vaultFileURL.pathExtension.lowercased()
+            let targetFileName = "rec_\(recordingId.uuidString).\(ext)"
+            let localDest = audioService.audioFileURL(for: targetFileName)
+            let data = try Data(contentsOf: vaultFileURL)
+            try data.write(to: localDest, options: .atomic)
+            recordings[idx].localAudioFileName = targetFileName
+            recordings[idx].vaultAudioRelativePath = relPath
+            saveToDisk()
+            lastBannerFeedback = "已将跨端音频缓存至本机录音目录（\(targetFileName)）。"
+            return localDest
+        case .cloudNotDownloaded(let relPath):
+            requestCloudAudioDownload(for: recordingId)
+            throw ObsidianSyncError.cloudFileNotDownloaded(relativePath: relPath)
+        case .missingOnCurrentDevice(let reason):
+            throw ObsidianSyncError.fileOperationFailed(reason)
+        }
+    }
+
+    public func requestCloudAudioDownload(for recordingId: UUID) {
+        guard let root = try? ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences),
+              let rec = recordings.first(where: { $0.id == recordingId }) else {
+            return
+        }
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        if let rel = MarkdownExporterService.sanitizedVaultRelativeAudioPath(rec.vaultAudioRelativePath) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: root.appendingPathComponent(rel))
+        } else if let cleanSub = try? ObsidianNoteSyncService.validateSafeRelativePath(preferences.obsidianAudioAttachmentSubfolder) {
+            for ext in ["m4a", "wav"] {
+                let candidate = root.appendingPathComponent("\(cleanSub)/rec_\(rec.id.uuidString).\(ext)")
+                try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
+            }
+        }
+        lastBannerFeedback = "已向 iCloud 请求下载跨端音频附件，请稍候重试回听。"
+    }
+
+    /// 当音频未通过笔记库同步时，允许用户在当前设备手动选择音频文件绑定恢复回听
+    public func importLocalAudioCopy(for recordingId: UUID, from sourceURL: URL) throws {
+        guard let idx = recordings.firstIndex(where: { $0.id == recordingId }) else {
+            throw ObsidianSyncError.fileOperationFailed("未找到对应录音记录。")
+        }
+        let accessed = sourceURL.startAccessingSecurityScopedResource()
+        defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
+
+        let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension.lowercased()
+        let targetFileName = "rec_\(recordingId.uuidString).\(ext)"
+        let localDest = audioService.audioFileURL(for: targetFileName)
+        let data = try Data(contentsOf: sourceURL)
+        try data.write(to: localDest, options: .atomic)
+
+        recordings[idx].localAudioFileName = targetFileName
+        saveToDisk()
+        lastBannerFeedback = "已导入并绑定本机音频文件，现在可以直接回听。"
+    }
+
+    /// 从 Obsidian 笔记库扫描另一端导出的带 `recording_id` 笔记，在本机尚无该录音记录时自动载入笔记与相对音频关联
+    @discardableResult
+    public func hydrateMissingRecordingsFromVault() throws -> Int {
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let existingIds = Set(recordings.map(\.id))
+        let hydratedList = try obsidianSyncService.hydrateMissingRecordingsFromVault(
+            vaultRootURL: root,
+            preferredSubfolder: preferences.obsidianTargetSubfolder,
+            existingRecordingIds: existingIds
+        )
+        guard !hydratedList.isEmpty else { return 0 }
+
+        for item in hydratedList {
+            recordings.append(item.recording)
+            notesByRecording[item.recording.id] = item.note
+            revisionsByNote[item.note.id] = [item.revision]
+            segmentsByRecording[item.recording.id] = item.segments
+            obsidianBindingsByRecording[item.recording.id] = item.binding
+            if let proj = item.note.projectName, !preferences.knownProjectNames.contains(proj) {
+                preferences.knownProjectNames.append(proj)
+            }
+        }
+        recordings.sort { $0.createdAt > $1.createdAt }
+        saveToDisk()
+        lastBannerFeedback = "已从 Obsidian 笔记库同步载入 \(hydratedList.count) 条跨端录音笔记。"
+        return hydratedList.count
     }
 
     // MARK: - P1-5 Personal Memory Review CRUD & Grounded Q&A

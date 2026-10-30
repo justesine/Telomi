@@ -992,6 +992,47 @@ public struct SettingsView: View {
                 .onChange(of: store.preferences.autoExportToObsidianOnComplete) { _, _ in
                     store.saveToDisk()
                 }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            // P2-7：iPhone 与 Mac 跨设备音频可用性策略
+            VStack(alignment: .leading, spacing: 8) {
+                Label("跨设备音频可用性策略（iPhone ⇄ Mac）", systemImage: "iphone.and.arrow.forward")
+                    .font(.caption.weight(.bold))
+
+                Picker("跨设备音频策略", selection: $store.preferences.audioSyncMode) {
+                    ForEach(AudioSyncMode.allCases, id: \.self) { mode in
+                        Text(mode.displayTitle).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.caption)
+                .onChange(of: store.preferences.audioSyncMode) { _, _ in
+                    store.saveToDisk()
+                }
+
+                Text(store.preferences.audioSyncMode.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Text("音频附件相对目录：")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("MemoFlow笔记/Attachments", text: $store.preferences.obsidianAudioAttachmentSubfolder)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .onChange(of: store.preferences.obsidianAudioAttachmentSubfolder) { _, _ in
+                            store.saveToDisk()
+                        }
+                }
+
+                Text("导出时仅写入相对于 Obsidian 笔记库根目录的路径（如 MemoFlow笔记/Attachments/rec_<ID>.m4a），绝不写入仅单机有效的 /Users/... 绝对路径。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }

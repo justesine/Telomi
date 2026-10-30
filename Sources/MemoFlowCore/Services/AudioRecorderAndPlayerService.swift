@@ -325,7 +325,8 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             url = audioFileURL(for: recording.localAudioFileName)
         }
 
-        guard !recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        let hasValidTarget = overrideFileURL != nil || !recording.localAudioFileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasValidTarget,
               FileManager.default.fileExists(atPath: url.path) else {
             self.isPlaying = false
             self.lastPlaybackError = "当前设备未找到原音频文件（\(recording.localAudioFileName)），无法播放。"

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -119,9 +120,12 @@ public struct RecordingDetailView: View {
             }
             .modifier(detailAlertsModifier(rec: rec))
             .onAppear {
+                if store.obsidianBindingsByRecording[rec.id] != nil {
+                    _ = try? store.syncScopedFieldsWithObsidian(for: rec.id)
+                }
                 if let jumpMs = initialJumpMs {
                     selectedTab = .transcript
-                    _ = audioService.play(recording: rec, startMs: jumpMs, endMs: initialEndMs)
+                    _ = store.playRecording(rec, startMs: jumpMs, endMs: initialEndMs)
                 }
             }
             .onChange(of: store.activeDeepLinkRequest) { _, req in
@@ -137,6 +141,7 @@ public struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 headerMetadataSection(rec: rec)
                 obsidianBindingAndConflictCard(rec: rec)
+                ScopedSyncAndAudioAvailabilityCard(store: store, recording: rec)
                 audioPlayerCard(rec: rec)
                 processingStatusCard(rec: rec)
                 detailTabSwitcher
@@ -575,7 +580,7 @@ public struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 14) {
                 Button {
-                    audioService.togglePlayPause(for: rec)
+                    store.togglePlayPauseRecording(rec)
                 } label: {
                     ZStack {
                         Circle()
@@ -599,7 +604,7 @@ public struct RecordingDetailView: View {
                         value: Binding(
                             get: { Double(currentMs) },
                             set: { newMs in
-                                audioService.seek(for: rec, toMs: Int(newMs))
+                                store.seekRecording(rec, toMs: Int(newMs))
                             }
                         ),
                         in: 0...Double(max(1000, totalMs))
@@ -981,7 +986,7 @@ public struct RecordingDetailView: View {
 
                 ForEach(Array(chapters.enumerated()), id: \.element.id) { idx, chapter in
                     Button {
-                        _ = audioService.play(recording: rec, startMs: chapter.startMs, endMs: chapter.endMs)
+                        _ = store.playRecording(rec, startMs: chapter.startMs, endMs: chapter.endMs)
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 8) {
@@ -1069,7 +1074,7 @@ public struct RecordingDetailView: View {
                     ForEach(rec.marks ?? []) { mark in
                         HStack(alignment: .top, spacing: 8) {
                             Button {
-                                _ = audioService.play(recording: rec, startMs: mark.startMs, endMs: mark.endMs)
+                                _ = store.playRecording(rec, startMs: mark.startMs, endMs: mark.endMs)
                             } label: {
                                 Label(
                                     TimeFormatting.formatMilliseconds(mark.startMs),
@@ -1174,7 +1179,7 @@ public struct RecordingDetailView: View {
 
                         // 时间戳播放按钮
                         Button {
-                            audioService.play(recording: rec, startMs: seg.startMs, endMs: nil)
+                            _ = store.playRecording(rec, startMs: seg.startMs, endMs: nil)
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "play.circle.fill")
@@ -1202,7 +1207,7 @@ public struct RecordingDetailView: View {
 
                     // 段落正文（点击从头播放该句）
                     Button {
-                        audioService.play(recording: rec, startMs: seg.startMs, endMs: nil)
+                        _ = store.playRecording(rec, startMs: seg.startMs, endMs: nil)
                     } label: {
                         Text(seg.text)
                             .font(.system(.body, design: .serif))
@@ -1343,7 +1348,7 @@ public struct ActionDraftReviewCard: View {
 
             if let startMs = draft.evidenceStartMs, let endMs = draft.evidenceEndMs {
                 Button {
-                    store.audioService.play(recording: recording, startMs: startMs, endMs: endMs)
+                    _ = store.playRecording(recording, startMs: startMs, endMs: endMs)
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "headphones")
@@ -1483,7 +1488,7 @@ public struct ConfirmedActionRowCard: View {
 
                 if let startMs = snap.evidenceStartMs, let endMs = snap.evidenceEndMs {
                     Button {
-                        store.audioService.play(recording: recording, startMs: startMs, endMs: endMs)
+                        _ = store.playRecording(recording, startMs: startMs, endMs: endMs)
                     } label: {
                         Label(TimeFormatting.formatMilliseconds(startMs), systemImage: "headphones")
                             .font(.caption2)
@@ -1821,5 +1826,268 @@ private struct DetailAlertsViewModifier: ViewModifier {
                 let currentMs = (store.audioService.playingRecordingId == recording.id) ? store.audioService.currentPlaybackTimeMs : 0
                 Text("将在 \(TimeFormatting.formatMilliseconds(currentMs)) 处记录书签，导出 Obsidian 时完整保留来源时间戳。")
             }
+    }
+}
+
+// MARK: - P2-6 & P2-7 Scoped Bidirectional Sync + Cross-Device Audio Availability Card
+
+private struct ScopedSyncAndAudioAvailabilityCard: View {
+    @ObservedObject var store: MemoFlowStore
+    let recording: Recording
+
+    @State private var newTagInput: String = ""
+    @State private var choosingAudioFile: Bool = false
+
+    private var note: Note? {
+        store.notesByRecording[recording.id]
+    }
+
+    private var binding: ObsidianNoteBinding? {
+        store.obsidianBindingsByRecording[recording.id]
+    }
+
+    private var hasVaultConfigured: Bool {
+        !(store.preferences.obsidianVaultRootPath ?? "").isEmpty
+    }
+
+    var body: some View {
+        let overview = store.syncOverview(for: recording)
+        VStack(alignment: .leading, spacing: 10) {
+            dualTrackStatusRow(overview: overview)
+            audioAvailabilityActionSection(overview: overview)
+            if note != nil {
+                manualTagsEditorRow
+            }
+            if let currentBinding = binding, !currentBinding.scopedFieldConflicts.isEmpty {
+                scopedConflictsSection(conflicts: currentBinding.scopedFieldConflicts)
+            }
+        }
+        .mfGlassCard(
+            cornerRadius: 14,
+            padding: 12,
+            tint: overview.audioState.isPlayableNow ? nil : MFTheme.warmAmber
+        )
+        .fileImporter(isPresented: $choosingAudioFile, allowedContentTypes: [.audio]) { result in
+            if case .success(let url) = result {
+                try? store.importLocalAudioCopy(for: recording.id, from: url)
+            }
+        }
+    }
+
+    private func dualTrackStatusRow(overview: NoteAndAudioSyncOverview) -> some View {
+        HStack(spacing: 8) {
+            MFBadgePill(
+                overview.noteBadgeTitle,
+                color: overview.isNoteSynced ? MFTheme.softViolet : MFTheme.textSecondary,
+                icon: "doc.text.fill"
+            )
+            MFBadgePill(
+                overview.audioState.badgeTitle,
+                color: overview.audioState.isPlayableNow
+                    ? (overview.audioState.isAudioSyncedAcrossDevices ? MFTheme.mintGreen : MFTheme.iceCyan)
+                    : MFTheme.warmAmber,
+                icon: overview.audioState.isPlayableNow ? "waveform" : "icloud.and.arrow.down"
+            )
+            Spacer()
+
+            if binding != nil && hasVaultConfigured {
+                Button {
+                    _ = try? store.syncScopedFieldsWithObsidian(for: recording.id)
+                } label: {
+                    Label("双向对账字段", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(MFTheme.iceBlue.opacity(0.16), in: Capsule())
+                        .foregroundStyle(MFTheme.iceCyan)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func audioAvailabilityActionSection(overview: NoteAndAudioSyncOverview) -> some View {
+        if let msg = overview.audioState.detailMessage {
+            Text(msg)
+                .font(.caption2)
+                .foregroundStyle(overview.audioState.isPlayableNow ? MFTheme.textSecondary : MFTheme.warmAmber)
+        }
+
+        switch overview.audioState {
+        case .availableLocal(_, let alsoSynced):
+            if !alsoSynced && hasVaultConfigured {
+                Button {
+                    _ = try? store.syncAudioAttachmentToVault(for: recording.id)
+                } label: {
+                    Label("同步音频副本到笔记库（供 iPhone / Mac 跨端回听）", systemImage: "icloud.and.arrow.up")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(MFTheme.mintGreen)
+                }
+                .buttonStyle(.plain)
+            }
+
+        case .availableInVaultAttachment:
+            Button {
+                _ = try? store.cacheVaultAudioToLocal(for: recording.id)
+            } label: {
+                Label("缓存音频到本机录音目录（离线可用）", systemImage: "arrow.down.circle.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MFTheme.iceCyan)
+            }
+            .buttonStyle(.plain)
+
+        case .cloudNotDownloaded:
+            Button {
+                store.requestCloudAudioDownload(for: recording.id)
+            } label: {
+                Label("请求下载 iCloud 音频附件", systemImage: "icloud.and.arrow.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MFTheme.warmAmber)
+            }
+            .buttonStyle(.plain)
+
+        case .missingOnCurrentDevice:
+            HStack(spacing: 10) {
+                if hasVaultConfigured {
+                    Button {
+                        _ = try? store.hydrateMissingRecordingsFromVault()
+                        _ = try? store.syncScopedFieldsWithObsidian(for: recording.id)
+                    } label: {
+                        Label("重新检查笔记库附件", systemImage: "arrow.clockwise")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Color.white.opacity(0.08), in: Capsule())
+                            .foregroundStyle(MFTheme.iceCyan)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    choosingAudioFile = true
+                } label: {
+                    Label("选择音频文件绑定…", systemImage: "folder.badge.plus")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(MFTheme.warmAmber.opacity(0.18), in: Capsule())
+                        .foregroundStyle(MFTheme.warmAmber)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var manualTagsEditorRow: some View {
+        let tags = note?.manualTags ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider().overlay(Color.white.opacity(0.08))
+            HStack(spacing: 6) {
+                Image(systemName: "tag.fill")
+                    .font(.caption2)
+                    .foregroundStyle(MFTheme.softViolet)
+                Text("手动标签（Obsidian ⇄ MemoFlow 双向同步）")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MFTheme.textSecondary)
+                Spacer()
+            }
+
+            HStack(spacing: 6) {
+                ForEach(tags, id: \.self) { tag in
+                    HStack(spacing: 3) {
+                        Text("#\(tag)")
+                            .font(.caption2.weight(.medium))
+                        Button {
+                            var updated = tags
+                            updated.removeAll { $0 == tag }
+                            store.updateManualTags(for: recording.id, tags: updated)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(MFTheme.softViolet.opacity(0.16), in: Capsule())
+                    .foregroundStyle(MFTheme.softViolet)
+                }
+
+                TextField("添加标签…", text: $newTagInput)
+                    .textFieldStyle(.plain)
+                    .font(.caption2)
+                    .frame(width: 90)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(MFTheme.recessedBg, in: Capsule())
+                    .onSubmit {
+                        submitNewTag()
+                    }
+
+                if !newTagInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("添加") {
+                        submitNewTag()
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MFTheme.iceCyan)
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    private func submitNewTag() {
+        let cleaned = newTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !cleaned.isEmpty else { return }
+        let current = note?.manualTags ?? []
+        store.updateManualTags(for: recording.id, tags: current + [cleaned])
+        newTagInput = ""
+    }
+
+    private func scopedConflictsSection(conflicts: [ObsidianScopedFieldConflict]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().overlay(Color.white.opacity(0.08))
+            Text("检测到有限字段双向同步冲突（双方同时修改了同一字段，请选择保留方式）：")
+                .font(.caption)
+                .foregroundStyle(MFTheme.warmAmber)
+
+            ForEach(conflicts) { conflict in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("字段：\(conflict.field.displayTitle)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text("• Obsidian：\(conflict.obsidianSummary)")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                    Text("• MemoFlow：\(conflict.memoFlowSummary)")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+
+                    HStack(spacing: 8) {
+                        ForEach(ObsidianConflictResolutionChoice.allCases, id: \.self) { choice in
+                            Button(choice.displayTitle) {
+                                try? store.resolveScopedFieldConflict(
+                                    for: recording.id,
+                                    field: conflict.field,
+                                    choice: choice
+                                )
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(MFTheme.iceBlue.opacity(0.16), in: Capsule())
+                            .foregroundStyle(MFTheme.iceCyan)
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(8)
+                .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
     }
 }

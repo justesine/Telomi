@@ -232,6 +232,41 @@ public enum MarkdownExporterService {
         return "[\(label)]"
     }
 
+    /// 校验并提取安全的笔记库相对音频路径（严禁导出仅在 Mac 有效的 `/Users/...` 等绝对路径）
+    public static func sanitizedVaultRelativeAudioPath(_ rawPath: String?) -> String? {
+        guard let raw = rawPath?.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              !raw.hasPrefix("/"),
+              !raw.hasPrefix("~") else {
+            return nil
+        }
+        let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let parts = cleaned.split(separator: "/")
+        guard !parts.isEmpty, !parts.contains(".."), !parts.contains(".") else {
+            return nil
+        }
+        return cleaned
+    }
+
+    /// 更新正文中 `<!-- memoflow:user:supplement:start --> ... <!-- memoflow:user:supplement:end -->` 的内容
+    public static func replaceUserSupplementRegion(in text: String, newSupplement: String) -> String {
+        guard let sRange = text.range(of: userSupplementStartMarker),
+              let eRange = text.range(of: userSupplementEndMarker, range: sRange.upperBound..<text.endIndex) else {
+            return text
+        }
+        let trimmed = newSupplement.replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let replacement: String
+        if trimmed.isEmpty {
+            replacement = "\(userSupplementStartMarker)\n\(userSupplementEndMarker)"
+        } else {
+            replacement = "\(userSupplementStartMarker)\n\(trimmed)\n\(userSupplementEndMarker)"
+        }
+        var copy = text
+        copy.replaceSubrange(sRange.lowerBound..<eRange.upperBound, with: replacement)
+        return copy
+    }
+
     /// 生成 YAML Frontmatter 行（支持合并保留用户在 Obsidian 中自定义的标签与额外属性）
     public static func renderFrontmatterLines(
         recording: Recording,
@@ -240,7 +275,9 @@ public enum MarkdownExporterService {
         segments: [TranscriptSegment] = [],
         preservedUserTags: [String] = [],
         preservedCustomKeyBlocks: [[String]] = [],
-        fallbackProjectRawValue: String? = nil
+        fallbackProjectRawValue: String? = nil,
+        overrideExactUserTags: [String]? = nil,
+        useExactNoteProject: Bool = false
     ) -> [String] {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
@@ -253,9 +290,11 @@ public enum MarkdownExporterService {
         let modeTag = (revision.mode == .quickNote) ? "随手记" : "会议"
         let title = exportTitle(recording: recording, revision: revision)
         let provenance = NoteVersionProvenance.evaluate(recording: recording, revision: revision, segments: segments)
+        let safeRelAudio = sanitizedVaultRelativeAudioPath(recording.vaultAudioRelativePath)
 
         var mergedTags: [String] = ["录音笔记", modeTag]
-        for tag in note.manualTags + preservedUserTags {
+        let sourceUserTags = overrideExactUserTags ?? (note.manualTags + preservedUserTags)
+        for tag in sourceUserTags {
             let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
             if !cleaned.isEmpty && !systemManagedTags.contains(cleaned) && !mergedTags.contains(cleaned) {
@@ -279,9 +318,15 @@ public enum MarkdownExporterService {
         lines.append("summary_alignment_status: \(escapeYAML(provenance.summaryAlignmentCode))")
         lines.append("note_revision_id: \(escapeYAML(revision.id.uuidString))")
         lines.append("note_origin: \(escapeYAML(revision.origin.rawValue))")
+        lines.append("audio_sync_status: \(escapeYAML(safeRelAudio != nil ? "synced_in_vault" : "local_only"))")
+        if let safeRelAudio {
+            lines.append("audio_attachment: \(escapeYAML(safeRelAudio))")
+        }
         if let projLink = formatProjectWikiLink(note.projectName) {
             lines.append("project: \(escapeYAML(projLink))")
-        } else if let fallback = fallbackProjectRawValue, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if !useExactNoteProject,
+                  let fallback = fallbackProjectRawValue,
+                  !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("project: \(fallback)")
         }
         let formattedTags = mergedTags.map { tag in
@@ -310,14 +355,16 @@ public enum MarkdownExporterService {
         let content = revision.content
         let provenance = NoteVersionProvenance.evaluate(recording: recording, revision: revision, segments: segments)
         let isoRecordedAt = formatISOTimestamp(recording.createdAt, timeZone: recording.recordedTimeZone)
+        let safeRelAudio = sanitizedVaultRelativeAudioPath(recording.vaultAudioRelativePath)
 
-        // 1. Header 区块（完整导出录音 ID、时间与时区、时长、关联项目双链、逐字稿审核状态与版本对齐说明）
+        // 1. Header 区块（完整导出录音 ID、时间与时区、时长、关联项目双链、逐字稿审核状态与音频同步状态）
         var headerLines: [String] = ["# \(title)", ""]
         var metaParts: [String] = [
             "录音 ID：`\(recording.id.uuidString)`",
             "时间：\(isoRecordedAt)（\(recording.recordedTimeZoneIdentifier)）",
             "时长：\(TimeFormatting.formatDuration(recording.duration))",
-            "逐字稿：\(provenance.transcriptReviewDisplayTitle)"
+            "逐字稿：\(provenance.transcriptReviewDisplayTitle)",
+            safeRelAudio != nil ? "音频：已同步笔记库附件" : "音频：仅保存在原录制设备"
         ]
         if let projLink = formatProjectWikiLink(note.projectName) {
             metaParts.insert("关联项目：\(projLink)", at: 1)
@@ -327,6 +374,9 @@ public enum MarkdownExporterService {
             metaParts.append("[在 MemoFlow 打开录音](\(openRecURL.absoluteString))")
         }
         headerLines.append("> " + metaParts.joined(separator: " · "))
+        if let safeRelAudio {
+            headerLines.append("> 跨端音频附件（相对路径）：![[\(safeRelAudio)]]")
+        }
 
         if provenance.isSummaryBasedOnOlderTranscript {
             headerLines.append("")

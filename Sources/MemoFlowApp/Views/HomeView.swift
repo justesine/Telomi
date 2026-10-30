@@ -246,6 +246,32 @@ public struct HomeView: View {
 
             Spacer()
 
+            if let vaultPath = store.preferences.obsidianVaultRootPath, !vaultPath.isEmpty {
+                Button {
+                    _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: true)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(MFTheme.mintGreen)
+                        Text("双向同步")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(MFTheme.textPrimary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(MFTheme.cardSurfaceGradient)
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
             Button {
                 showingGroundedQA = true
             } label: {
@@ -921,6 +947,26 @@ private struct RecordingRowCard: View {
                     .padding(.vertical, 3)
                     .background(MFTheme.softViolet.opacity(0.16), in: Capsule())
                     .foregroundStyle(MFTheme.softViolet)
+                }
+            }
+
+            // P2-7：明确区分「笔记已同步」与「音频已同步 / 待到达」状态胶囊（已绑定笔记或跨端音频缺失时展示）
+            let syncInfo = store.syncOverview(for: rec)
+            if store.obsidianBindingsByRecording[rec.id] != nil || !syncInfo.audioState.isPlayableNow {
+                HStack(spacing: 6) {
+                    MFBadgePill(
+                        syncInfo.noteBadgeTitle,
+                        color: syncInfo.isNoteSynced ? MFTheme.softViolet : MFTheme.textSecondary,
+                        icon: "doc.text.fill"
+                    )
+                    MFBadgePill(
+                        syncInfo.audioState.badgeTitle,
+                        color: syncInfo.audioState.isPlayableNow
+                            ? (syncInfo.audioState.isAudioSyncedAcrossDevices ? MFTheme.mintGreen : MFTheme.iceCyan)
+                            : MFTheme.warmAmber,
+                        icon: syncInfo.audioState.isPlayableNow ? "waveform" : "icloud.and.arrow.down"
+                    )
+                    Spacer()
                 }
             }
 

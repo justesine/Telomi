@@ -33,6 +33,30 @@ public enum AppearanceTheme: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// P2-7：跨设备（iPhone <-> Mac）录音音频可用性与同步策略
+public enum AudioSyncMode: String, Codable, CaseIterable, Sendable {
+    case localOnly = "local_only"
+    case vaultAttachmentCopy = "vault_attachment_copy"
+
+    public var displayTitle: String {
+        switch self {
+        case .localOnly:
+            return "仅保留在录制设备本地（不同步音频副本）"
+        case .vaultAttachmentCopy:
+            return "同步音频副本到笔记库附件目录（支持 iPhone 与 Mac 跨端回听）"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .localOnly:
+            return "笔记通过 Obsidian 同步，原音频仅保存在录制设备上；另一端打开时会明确提示「笔记已同步、音频未到达」。"
+        case .vaultAttachmentCopy:
+            return "导出笔记时自动将音频副本存入笔记库相对附件目录，iPhone 与 Mac 两端均可通过同一笔记库直接定位回听。"
+        }
+    }
+}
+
 /// 用户偏好与模型配置（PRD P06 & 13）
 public struct MemoFlowPreferences: Codable, Equatable, Sendable {
     public var obsidianVaultBookmark: Data? = nil
@@ -42,6 +66,10 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
     public var knowledgeIncludedFolders: [String] = []
     /// 是否允许将本地检索到的历史笔记片段与已确认个人记忆发送至云端 LLM（P1-5 独立授权开关，默认关闭）
     public var allowSendingKnowledgeToCloudLLM: Bool = false
+    /// P2-7：跨设备音频副本同步方式（默认仅保存在本机，可选同步到笔记库附件目录）
+    public var audioSyncMode: AudioSyncMode = .localOnly
+    /// P2-7：笔记库内保存跨端音频副本的相对附件子目录（严禁使用仅 Mac 有效的绝对路径）
+    public var obsidianAudioAttachmentSubfolder: String = "MemoFlow笔记/Attachments"
     public var defaultNoteMode: NoteMode
     public var asrEngineMode: ASREngineMode
     public var asrBaseURL: String
@@ -132,6 +160,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.knowledgeExcludedFolders = try c.decodeIfPresent(String.self, forKey: .knowledgeExcludedFolders) ?? "日记\n私人"
         self.knowledgeIncludedFolders = try c.decodeIfPresent([String].self, forKey: .knowledgeIncludedFolders) ?? []
         self.allowSendingKnowledgeToCloudLLM = try c.decodeIfPresent(Bool.self, forKey: .allowSendingKnowledgeToCloudLLM) ?? false
+        self.audioSyncMode = try c.decodeIfPresent(AudioSyncMode.self, forKey: .audioSyncMode) ?? .localOnly
+        self.obsidianAudioAttachmentSubfolder = try c.decodeIfPresent(String.self, forKey: .obsidianAudioAttachmentSubfolder) ?? "MemoFlow笔记/Attachments"
         self.defaultNoteMode = try c.decodeIfPresent(NoteMode.self, forKey: .defaultNoteMode) ?? .quickNote
         self.asrEngineMode = try c.decodeIfPresent(ASREngineMode.self, forKey: .asrEngineMode) ?? .openAICompatible
         self.asrBaseURL = try c.decodeIfPresent(String.self, forKey: .asrBaseURL) ?? "https://api.siliconflow.cn/v1"

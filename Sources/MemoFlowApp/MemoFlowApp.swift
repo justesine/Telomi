@@ -34,7 +34,10 @@ public struct MemoFlowApp: App {
     public var body: some Scene {
         WindowGroup {
             HomeView(store: store)
-                .task { await store.refreshKnowledge() }
+                .task {
+                    await store.refreshKnowledge()
+                    _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: false)
+                }
                 .onOpenURL { incomingURL in
                     #if os(macOS)
                     NSApplication.shared.activate(ignoringOtherApps: true)
@@ -44,6 +47,7 @@ public struct MemoFlowApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         store.audioService.reconcileRecordingOnForeground()
+                        _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: false)
                         Task { await store.refreshKnowledge() }
                     }
                 }
