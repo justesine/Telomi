@@ -1036,22 +1036,40 @@ private struct RecordingRowCard: View {
                             onOpenSettings()
                         }
 
-                        Button {
-                            store.preferences.asrEngineMode = .appleOnDevice
-                            store.saveToDisk()
-                            let mode = note?.mode ?? store.preferences.defaultNoteMode
-                            Task {
-                                await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
+                        let hasSegments = !(store.segmentsByRecording[rec.id]?.isEmpty ?? true)
+                        if hasSegments {
+                            Button {
+                                let mode = note?.mode ?? store.preferences.defaultNoteMode
+                                Task {
+                                    await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: false)
+                                }
+                            } label: {
+                                Label("重新整理", systemImage: "sparkles")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Color.white.opacity(0.08), in: Capsule())
                             }
-                        } label: {
-                            Label("改用 Apple 本地识别重试", systemImage: "waveform.badge.mic")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(MFTheme.textPrimary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.08), in: Capsule())
+                            .buttonStyle(.plain)
+                        } else {
+                            Button {
+                                store.preferences.asrEngineMode = .appleOnDevice
+                                store.saveToDisk()
+                                let mode = note?.mode ?? store.preferences.defaultNoteMode
+                                Task {
+                                    await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
+                                }
+                            } label: {
+                                Label("改用 Apple 本地识别重试", systemImage: "waveform.badge.mic")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Color.white.opacity(0.08), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 2)

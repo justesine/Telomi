@@ -2140,6 +2140,9 @@ public final class MemoFlowStore: ObservableObject {
             self.processingConsent = snap.processingConsent
             self.processingJobsByRecording = snap.processingJobsByRecording
             self.preferences = snap.preferences
+            if self.preferences.llmModelName.contains("Qwen3-235B") || self.preferences.llmModelName.contains("Qwen3-32B") {
+                self.preferences.llmModelName = "Qwen/Qwen2.5-72B-Instruct"
+            }
             return true
         } catch {
             print("MemoFlowStore loadFromDisk decode error: \(error)")

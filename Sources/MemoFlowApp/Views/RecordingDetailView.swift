@@ -641,11 +641,20 @@ public struct RecordingDetailView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(MFTheme.warmAmber)
                     Spacer()
-                    MFLuminousActionButton(store.preferences.asrEngineMode == .localWhisper
-                                            ? "重新生成机器逐字稿" : "立即重试转写与整理", icon: "arrow.clockwise") {
+                    let hasSegments = !(store.segmentsByRecording[rec.id]?.isEmpty ?? true)
+                    let buttonTitle: String = {
+                        if store.preferences.asrEngineMode == .localWhisper {
+                            return "重新生成机器逐字稿"
+                        } else if hasSegments {
+                            return "重新整理笔记"
+                        } else {
+                            return "立即重试转写与整理"
+                        }
+                    }()
+                    MFLuminousActionButton(buttonTitle, icon: hasSegments ? "sparkles" : "arrow.clockwise") {
                         let mode = note?.mode ?? store.preferences.defaultNoteMode
                         Task {
-                            await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: true)
+                            await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: !hasSegments)
                         }
                     }
                 }

@@ -183,11 +183,11 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
             ]
         case .siliconFlow:
             return [
-                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（1017 更新，硅基流动）"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（推荐，硅基流动）"),
                 ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（进阶推理，硅基流动）"),
-                ("Qwen/Qwen3-235B-A22B", "通义千问 Qwen3-235B-A22B（最新旗舰 MoE）"),
-                ("Qwen/Qwen3-32B", "通义千问 Qwen3-32B（高速均衡）"),
-                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct")
+                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct（高智商旗舰）"),
+                ("Qwen/Qwen2.5-32B-Instruct", "通义千问 Qwen2.5-32B-Instruct（高速均衡）"),
+                ("Qwen/Qwen2.5-7B-Instruct", "通义千问 Qwen2.5-7B-Instruct（轻量限免）")
             ]
         case .openAI:
             return [
