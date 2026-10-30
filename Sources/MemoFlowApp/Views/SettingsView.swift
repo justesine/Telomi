@@ -446,7 +446,7 @@ public struct SettingsView: View {
     private var macTwoPaneLayout: some View {
         HStack(spacing: 0) {
             macSidebarView
-                .frame(width: 250)
+                .frame(width: 220)
 
             Divider().overlay(Color.white.opacity(0.08))
 
@@ -512,13 +512,6 @@ public struct SettingsView: View {
                             .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
 
                         Spacer()
-
-                        Text(statusSummary(for: dest))
-                            .font(.system(size: 10))
-                            .foregroundStyle(MFTheme.textMuted)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 80, alignment: .trailing)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
