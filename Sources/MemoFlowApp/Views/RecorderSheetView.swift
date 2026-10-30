@@ -297,7 +297,7 @@ public struct RecorderSheetView: View {
 
     private func completeAndSaveRecording() {
         guard let result = audioService.finishRecording() else {
-            dismiss()
+            errorMessage = "暂时无法完成保存；录音窗口和恢复记录已保留，请重试。"
             return
         }
         store.handleFinishedRecording(

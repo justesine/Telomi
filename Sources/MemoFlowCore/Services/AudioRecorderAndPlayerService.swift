@@ -30,6 +30,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     private var playbackTimer: Timer?
     private var interruptionObservers: [NSObjectProtocol] = []
     private var mediaServicesWereReset = false
+    private var shouldResumeAfterInterruption = false
 
     public struct RecordingJournal: Codable {
         public let id: UUID
@@ -157,6 +158,12 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #endif
 
         guard recorder.record() else {
+            // No recording session started. Clear only this attempt's journal so
+            // a failed microphone activation cannot block every future take.
+            try? FileManager.default.removeItem(at: journalURL)
+            #if os(iOS)
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
             throw NSError(
                 domain: "MemoFlowAudio",
                 code: 500,
@@ -173,6 +180,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         self.currentRecordingDuration = 0
         self.interruptionAlertMessage = nil
         self.mediaServicesWereReset = false
+        self.shouldResumeAfterInterruption = false
         self.recordingBookmarks = []
 
         startMeterTimer()
@@ -182,6 +190,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     /// 暂停录音（PRD R02 & A03：暂停段不计入有效音频）
     public func pauseRecording() {
         guard isRecording, !isPaused, let recorder = audioRecorder else { return }
+        shouldResumeAfterInterruption = false
         recorder.pause()
         currentRecordingDuration = recorder.currentTime
         isPaused = true
@@ -229,6 +238,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         self.activeRecordingCreatedAt = nil
         self.isRecording = false
         self.isPaused = false
+        self.shouldResumeAfterInterruption = false
         self.currentRecordingDuration = 0
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -422,6 +432,16 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         playbackTimer = nil
     }
 
+    /// The system can stop an audio recorder while the UI timer is suspended.
+    /// Reconcile on foreground so a stopped session is never shown as recording.
+    public func reconcileRecordingOnForeground() {
+        guard isRecording, !isPaused, let recorder = audioRecorder, !recorder.isRecording else { return }
+        currentRecordingDuration = max(currentRecordingDuration, recorder.currentTime)
+        isPaused = true
+        shouldResumeAfterInterruption = false
+        interruptionAlertMessage = "录音已停止接收声音；已录片段仍保留。请点「继续录音」或完成保存。"
+    }
+
     private func setupAudioInterruptionObservers() {
         #if os(iOS)
         interruptionObservers.append(NotificationCenter.default.addObserver(
@@ -438,10 +458,21 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
                 guard let self, self.isRecording else { return }
                 switch type {
                 case .began:
+                    let wasActivelyRecording = !self.isPaused
                     self.pauseRecording()
+                    self.shouldResumeAfterInterruption = wasActivelyRecording
                     self.interruptionAlertMessage = "录音被系统音频/来电打断，已自动暂停并保护已录片段。你可以选择继续录音或直接保存。"
                 case .ended:
-                    self.interruptionAlertMessage = "音频中断已结束，点击「继续」可恢复录音，或点击「完成」安全保存已有片段。"
+                    let shouldResume = self.shouldResumeAfterInterruption
+                    self.shouldResumeAfterInterruption = false
+                    if shouldResume {
+                        self.resumeRecording()
+                        if !self.isPaused {
+                            self.interruptionAlertMessage = "音频中断已结束，录音已自动继续。"
+                        }
+                    } else {
+                        self.interruptionAlertMessage = "音频中断已结束；已录片段保留，可继续录音或完成保存。"
+                    }
                 @unknown default:
                     break
                 }
@@ -454,6 +485,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             guard reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
             Task { @MainActor in
                 guard let self, self.isRecording else { return }
+                self.shouldResumeAfterInterruption = false
                 self.pauseRecording()
                 self.interruptionAlertMessage = "麦克风或耳机已断开，录音已暂停。确认输入设备后可继续。"
             }
@@ -464,6 +496,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self, self.isRecording else { return }
                 self.mediaServicesWereReset = true
+                self.shouldResumeAfterInterruption = false
                 self.pauseRecording()
                 self.interruptionAlertMessage = "系统音频服务已重置，请先保存已有录音，再开始新录音。"
             }

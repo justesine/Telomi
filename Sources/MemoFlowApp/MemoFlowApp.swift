@@ -36,7 +36,10 @@ public struct MemoFlowApp: App {
             HomeView(store: store)
                 .task { await store.refreshKnowledge() }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { Task { await store.refreshKnowledge() } }
+                    if phase == .active {
+                        store.audioService.reconcileRecordingOnForeground()
+                        Task { await store.refreshKnowledge() }
+                    }
                 }
                 .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
                 .focusEffectDisabled()
