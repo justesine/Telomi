@@ -79,7 +79,7 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         asrBaseURL: String = "https://api.siliconflow.cn/v1",
         asrModelName: String = "FunAudioLLM/SenseVoiceSmall",
         llmBaseURL: String = "https://api.deepseek.com/v1",
-        llmModelName: String = "deepseek-chat",
+        llmModelName: String = "deepseek-flash",
         defaultEventDurationMinutes: Int = 30,
         defaultTaskDestination: PrimaryDestination = .reminders,
         preferredCalendarIdentifier: String? = nil,
@@ -131,7 +131,21 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.asrBaseURL = try c.decodeIfPresent(String.self, forKey: .asrBaseURL) ?? "https://api.siliconflow.cn/v1"
         self.asrModelName = try c.decodeIfPresent(String.self, forKey: .asrModelName) ?? "FunAudioLLM/SenseVoiceSmall"
         self.llmBaseURL = try c.decodeIfPresent(String.self, forKey: .llmBaseURL) ?? "https://api.deepseek.com/v1"
-        self.llmModelName = try c.decodeIfPresent(String.self, forKey: .llmModelName) ?? "deepseek-chat"
+        let savedLLMModel = try c.decodeIfPresent(String.self, forKey: .llmModelName) ?? "deepseek-flash"
+        // Upgrade only legacy names on the official DeepSeek endpoint. Custom
+        // gateways and explicitly selected modern models keep their own IDs.
+        if self.llmBaseURL == "https://api.deepseek.com/v1" || self.llmBaseURL == "https://api.deepseek.com" {
+            switch savedLLMModel {
+            case "deepseek-chat": self.llmModelName = "deepseek-flash"
+            case "deepseek-reasoner": self.llmModelName = "deepseek-v4-pro"
+            default: self.llmModelName = savedLLMModel
+            }
+        } else if self.llmBaseURL == "https://api.siliconflow.cn/v1",
+                  savedLLMModel == "deepseek-ai/DeepSeek-V3" {
+            self.llmModelName = "deepseek-ai/DeepSeek-V4.1-Flash"
+        } else {
+            self.llmModelName = savedLLMModel
+        }
         self.defaultEventDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .defaultEventDurationMinutes) ?? 30
         self.defaultTaskDestination = try c.decodeIfPresent(PrimaryDestination.self, forKey: .defaultTaskDestination) ?? .reminders
         self.preferredCalendarIdentifier = try c.decodeIfPresent(String.self, forKey: .preferredCalendarIdentifier)

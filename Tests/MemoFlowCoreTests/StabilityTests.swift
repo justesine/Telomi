@@ -61,6 +61,21 @@ final class StabilityTests: XCTestCase {
         XCTAssertEqual(try ASRAndLLMService.endpoint(baseURL: "https://example.com/v1/", path: "chat/completions").path, "/v1/chat/completions")
     }
 
+    func testLegacyDeepSeekModelMigrationPreservesCustomGateway() throws {
+        let official = MemoFlowPreferences(llmModelName: "deepseek-chat")
+        let upgraded = try JSONDecoder().decode(MemoFlowPreferences.self, from: JSONEncoder().encode(official))
+        XCTAssertEqual(upgraded.llmModelName, "deepseek-flash")
+        let reasoning = MemoFlowPreferences(llmModelName: "deepseek-reasoner")
+        let upgradedReasoning = try JSONDecoder().decode(MemoFlowPreferences.self, from: JSONEncoder().encode(reasoning))
+        XCTAssertEqual(upgradedReasoning.llmModelName, "deepseek-v4-pro")
+        let gateway = MemoFlowPreferences(llmBaseURL: "https://example.com/v1", llmModelName: "deepseek-chat")
+        let preserved = try JSONDecoder().decode(MemoFlowPreferences.self, from: JSONEncoder().encode(gateway))
+        XCTAssertEqual(preserved.llmModelName, "deepseek-chat")
+        let siliconFlow = MemoFlowPreferences(llmBaseURL: "https://api.siliconflow.cn/v1", llmModelName: "deepseek-ai/DeepSeek-V3")
+        let upgradedSiliconFlow = try JSONDecoder().decode(MemoFlowPreferences.self, from: JSONEncoder().encode(siliconFlow))
+        XCTAssertEqual(upgradedSiliconFlow.llmModelName, "deepseek-ai/DeepSeek-V4.1-Flash")
+    }
+
     @MainActor
     func testRecoveryPreservesAudioAndBookmarksWithoutCloudProcessing() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

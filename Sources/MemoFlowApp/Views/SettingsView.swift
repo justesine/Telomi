@@ -14,9 +14,9 @@ import MemoFlowCore
 // MARK: - Structured Provider & Model Catalogs (Selection-First, No Raw Fill-in-the-Blank)
 
 public enum ASRProviderOption: String, CaseIterable, Identifiable {
+    case siliconFlow = "siliconflow"
     case appleLocal = "apple_local"
     case whisperLocal = "whisper_local"
-    case siliconFlow = "siliconflow"
     case groq = "groq"
     case openAI = "openai"
     case custom = "custom"
@@ -108,9 +108,9 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
 }
 
 public enum LLMProviderOption: String, CaseIterable, Identifiable {
+    case siliconFlow = "siliconflow"
     case deepSeek = "deepseek"
     case qwen, doubao, glm, kimi, minimax, qianfan
-    case siliconFlow = "siliconflow"
     case openAI = "openai"
     case localRules = "local_rules"
     case custom = "custom"
@@ -135,7 +135,7 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
 
     public var badge: String {
         switch self {
-        case .deepSeek: return "中文推理极佳"
+        case .deepSeek: return "V4.1 Flash / V4 Pro"
         case .qwen, .glm, .kimi, .minimax, .qianfan: return "文本整理 · 需 API Key"
         case .doubao: return "填写模型或接入点 ID"
         case .siliconFlow: return "可与语音共用 Key"
@@ -178,14 +178,13 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
         case .doubao, .glm, .kimi, .minimax, .qianfan: return []
         case .deepSeek:
             return [
-                ("deepseek-chat", "DeepSeek-V3 最新版（官方自动指向最新 V3 权重）"),
-                ("deepseek-reasoner", "DeepSeek-R1 最新版（官方自动指向最新 R1 深度推理）")
+                ("deepseek-flash", "DeepSeek-V4.1 Flash（当前官方默认）"),
+                ("deepseek-v4-pro", "DeepSeek-V4 Pro（进阶推理）")
             ]
         case .siliconFlow:
             return [
-                ("deepseek-ai/DeepSeek-V3", "DeepSeek-V3（硅基流动标准通道）"),
-                ("Pro/deepseek-ai/DeepSeek-V3", "Pro/DeepSeek-V3（硅基流动高速 Pro 通道）"),
-                ("deepseek-ai/DeepSeek-R1", "DeepSeek-R1（深度思考推理）"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（1017 更新，硅基流动）"),
+                ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（进阶推理，硅基流动）"),
                 ("Qwen/Qwen3-235B-A22B", "通义千问 Qwen3-235B-A22B（最新旗舰 MoE）"),
                 ("Qwen/Qwen3-32B", "通义千问 Qwen3-32B（高速均衡）"),
                 ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct")
@@ -395,6 +394,8 @@ public struct SettingsView: View {
                     }
                 }
             }
+            Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
+                .font(.caption)
 
             // 预置模型 + 动态拉取/自定义模型选择（支持一键从 /v1/models 拉取最新模型，或手动添加新模型）
             if selectedASRProvider != .custom {
@@ -515,6 +516,8 @@ public struct SettingsView: View {
                     }
                 }
             }
+            Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
+                .font(.caption)
 
             // 预置模型 + 动态拉取/自定义模型单选列表
             if selectedLLMProvider.requiresAPIKey {
@@ -570,7 +573,7 @@ public struct SettingsView: View {
 
                     if showingAddLLMModelField {
                         HStack(spacing: 8) {
-                            TextField("输入新发布的模型 ID（如 deepseek-v4 或 gpt-5）", text: $newLLMModelIdInput)
+                            TextField("输入服务商公布的模型 ID", text: $newLLMModelIdInput)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.caption.monospaced())
                             Button("添加并选中") {
