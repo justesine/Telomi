@@ -43,6 +43,15 @@ public final class MemoFlowStore: ObservableObject {
     public let obsidianSyncService = ObsidianNoteSyncService()
     private var activePipelineRecordingIds = Set<UUID>()
 
+    // MARK: - 边录边整理（实时流式转写与增量草稿）状态
+    @Published public private(set) var liveStreamingProgress: LiveStreamingProgress?
+    @Published public private(set) var liveDraftNote: Note?
+    @Published public private(set) var liveDraftRevision: NoteRevision?
+    public var liveChunkQueue: [LiveAudioChunkJournalItem] = []
+    public var liveChunkAudioURLs: [UUID: URL] = [:]
+    private var isDrainingLiveChunkQueue: Bool = false
+    private var lastLiveSummaryUpdateMs: Int = 0
+
     public var obsidianBackupsDirectoryURL: URL {
         persistenceURL.deletingLastPathComponent().appendingPathComponent("MemoFlowVaultBackups", isDirectory: true)
     }
@@ -129,6 +138,26 @@ public final class MemoFlowStore: ObservableObject {
             KeychainService.shared.migrateLegacyKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
         }
         if let (journal, duration) = resolvedAudio.recoverInterruptedRecording() {
+            // 检查是否存在边录边整理未完成切片日记，恢复已转写进度（PRD 边录边整理 异常退出恢复）
+            let liveChunks = resolvedAudio.loadLiveChunksJournal(for: journal.id)
+            if !liveChunks.isEmpty {
+                var recoveredSegments: [TranscriptSegment] = []
+                for chunk in liveChunks where chunk.status == .transcribed {
+                    if let text = chunk.transcriptText, !text.isEmpty {
+                        recoveredSegments.append(TranscriptSegment(
+                            id: chunk.id.uuidString,
+                            recordingId: journal.id,
+                            startMs: chunk.startMs,
+                            endMs: chunk.endMs,
+                            text: text
+                        ))
+                    }
+                }
+                if !recoveredSegments.isEmpty {
+                    self.segmentsByRecording[journal.id] = recoveredSegments
+                }
+            }
+
             if !recordings.contains(where: { $0.id == journal.id }) {
                 var recovered = Recording(id: journal.id, title: "已恢复的中断录音", createdAt: journal.createdAt,
                     duration: duration, localAudioFileName: journal.fileName,
@@ -138,6 +167,12 @@ public final class MemoFlowStore: ObservableObject {
             }
             if saveToDisk() { resolvedAudio.acknowledgeSavedRecording(id: journal.id) }
             lastBannerFeedback = "已恢复上次中断的录音，等待你回听与处理。"
+        }
+
+        self.audioService.onLiveChunkAvailable = { [weak self] item, url in
+            Task { @MainActor [weak self] in
+                self?.enqueueLiveChunk(item, url: url)
+            }
         }
     }
 
@@ -339,8 +374,12 @@ public final class MemoFlowStore: ObservableObject {
             return
         }
 
-        // 检查云处理授权偏好（PRD R12 & A28）
-        if !preferences.asrEngineMode.sendsAudioToCloud && (KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty {
+        if preferences.liveStreamingTranscriptionEnabled {
+            // 边录边整理模式：录音停止后复用已完成分段，只处理剩余片段并做最终合并（PRD 边录边整理）
+            Task {
+                await finalizeLiveStreamingRecording(for: id, selectedMode: selectedMode)
+            }
+        } else if !preferences.asrEngineMode.sendsAudioToCloud && (KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty {
             // 纯本地模式无需上传云端
             Task {
                 await runProcessingPipeline(for: id, mode: selectedMode)
@@ -353,6 +392,281 @@ public final class MemoFlowStore: ObservableObject {
             // 需要弹出云处理授权确认
             pendingConsentRecordingId = id
             pendingConsentMode = selectedMode
+        }
+    }
+
+    // MARK: - 边录边整理（分段转写队列、增量草稿生成与最终合并）
+
+    public func enqueueLiveChunk(_ item: LiveAudioChunkJournalItem, url: URL) {
+        liveChunkAudioURLs[item.id] = url
+        if let idx = liveChunkQueue.firstIndex(where: { $0.id == item.id || $0.index == item.index }) {
+            liveChunkQueue[idx] = item
+        } else {
+            liveChunkQueue.append(item)
+        }
+        audioService.appendLiveChunkToJournal(item, for: item.recordingId)
+
+        let pendingCount = liveChunkQueue.filter { $0.status == .pending || $0.status == .transcribing }.count
+        let processedCount = liveChunkQueue.filter { $0.status == .transcribed }.count
+        let failedCount = liveChunkQueue.filter { $0.status == .failed }.count
+        let transcribedMs = liveChunkQueue.filter { $0.status == .transcribed }.map(\.endMs).max() ?? 0
+
+        self.liveStreamingProgress = LiveStreamingProgress(
+            recordingId: item.recordingId,
+            totalAudioDurationMs: Int(audioService.currentRecordingDuration * 1000),
+            transcribedDurationMs: transcribedMs,
+            pendingChunksCount: pendingCount,
+            processedChunksCount: processedCount,
+            failedChunksCount: failedCount,
+            isLiveDraft: true,
+            lastSummaryUpdateMs: lastLiveSummaryUpdateMs,
+            statusMessage: failedCount > 0 ? "⚠️ \(failedCount) 个分段处理受阻，已保留待重试" : "实时分段转写中"
+        )
+
+        Task { @MainActor [weak self] in
+            await self?.drainLiveChunkQueue()
+        }
+    }
+
+    public func drainLiveChunkQueue() async {
+        guard !isDrainingLiveChunkQueue else { return }
+        isDrainingLiveChunkQueue = true
+        defer { isDrainingLiveChunkQueue = false }
+
+        while let nextIndex = liveChunkQueue.firstIndex(where: { $0.status == .pending || ($0.status == .failed && $0.retryCount < 3) }) {
+            var chunk = liveChunkQueue[nextIndex]
+            chunk.status = .transcribing
+            liveChunkQueue[nextIndex] = chunk
+            audioService.appendLiveChunkToJournal(chunk, for: chunk.recordingId)
+
+            let candidateURL = liveChunkAudioURLs[chunk.id] ?? {
+                let candidate = audioService.recordingsDirectoryURL.appendingPathComponent("live_chunks_\(chunk.recordingId.uuidString)/\(chunk.fileName)")
+                return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+            }()
+
+            guard let url = candidateURL else {
+                chunk.status = .failed
+                chunk.errorDescription = "切片音频文件丢失"
+                liveChunkQueue[nextIndex] = chunk
+                audioService.appendLiveChunkToJournal(chunk, for: chunk.recordingId)
+                continue
+            }
+
+            let asrKey = KeychainService.shared.readKey(for: .asrAPIKey, endpoint: preferences.asrBaseURL)
+            do {
+                let segments = try await ASRAndLLMService.shared.transcribeSingleChunk(
+                    fileURL: url,
+                    chunk: chunk,
+                    preferences: preferences,
+                    apiKey: asrKey
+                )
+                chunk.status = .transcribed
+                chunk.transcriptText = segments.map(\.text).joined(separator: " ")
+                chunk.completedAt = Date()
+                liveChunkQueue[nextIndex] = chunk
+                audioService.appendLiveChunkToJournal(chunk, for: chunk.recordingId)
+
+                var existingSegments = segmentsByRecording[chunk.recordingId] ?? []
+                existingSegments.append(contentsOf: segments)
+                existingSegments.sort { $0.startMs < $1.startMs }
+                segmentsByRecording[chunk.recordingId] = existingSegments
+
+                let transcribedMs = liveChunkQueue.filter { $0.status == .transcribed }.map(\.endMs).max() ?? 0
+                let pendingCount = liveChunkQueue.filter { $0.status == .pending || $0.status == .transcribing }.count
+                let processedCount = liveChunkQueue.filter { $0.status == .transcribed }.count
+                let failedCount = liveChunkQueue.filter { $0.status == .failed }.count
+
+                self.liveStreamingProgress = LiveStreamingProgress(
+                    recordingId: chunk.recordingId,
+                    totalAudioDurationMs: Int(audioService.currentRecordingDuration * 1000),
+                    transcribedDurationMs: transcribedMs,
+                    pendingChunksCount: pendingCount,
+                    processedChunksCount: processedCount,
+                    failedChunksCount: failedCount,
+                    isLiveDraft: true,
+                    lastSummaryUpdateMs: lastLiveSummaryUpdateMs,
+                    statusMessage: "实时分段转写完成 · 第 \(chunk.index + 1) 段"
+                )
+
+                // 按分钟或内容量增量生成草稿（控制费用与电量，PRD 边录边整理要求 3）
+                let intervalMs = preferences.liveStreamingSummaryIntervalSeconds * 1000
+                if (chunk.endMs - lastLiveSummaryUpdateMs) >= intervalMs || lastLiveSummaryUpdateMs == 0 {
+                    await updateLiveDraftNote(for: chunk.recordingId, newSegments: segments)
+                    lastLiveSummaryUpdateMs = chunk.endMs
+                }
+            } catch {
+                chunk.status = .failed
+                chunk.retryCount += 1
+                chunk.errorDescription = error.localizedDescription
+                liveChunkQueue[nextIndex] = chunk
+                audioService.appendLiveChunkToJournal(chunk, for: chunk.recordingId)
+            }
+        }
+    }
+
+    private func updateLiveDraftNote(for recordingId: UUID, newSegments: [TranscriptSegment]) async {
+        guard let recIdx = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        let recording = recordings[recIdx]
+        let currentNote = notesByRecording[recordingId]
+        let currentRevision = currentNote.flatMap { revisionsByNote[$0.id]?.last }
+        let llmKey = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
+
+        do {
+            let updatedContent = try await ASRAndLLMService.shared.incrementallyUpdateLiveDraft(
+                existingContent: currentRevision?.content,
+                newSegments: newSegments,
+                recording: recording,
+                preferences: preferences,
+                llmAPIKey: llmKey
+            )
+
+            let noteId = currentNote?.id ?? UUID()
+            let revId = UUID()
+            let newRevision = NoteRevision(
+                id: revId,
+                noteId: noteId,
+                mode: currentNote?.mode ?? preferences.defaultNoteMode,
+                generatedAt: Date(),
+                content: updatedContent,
+                origin: .ai,
+                previousRevisionId: currentRevision?.id,
+                sourceTranscriptDigest: NoteVersionProvenance.transcriptDigest(for: segmentsByRecording[recordingId] ?? []),
+                basedOnTranscriptReviewed: false,
+                isLiveDraft: true
+            )
+
+            let note = Note(
+                id: noteId,
+                recordingId: recordingId,
+                mode: currentNote?.mode ?? preferences.defaultNoteMode,
+                editedAt: Date(),
+                currentRevisionId: revId
+            )
+
+            self.notesByRecording[recordingId] = note
+            var revs = self.revisionsByNote[noteId] ?? []
+            revs.append(newRevision)
+            self.revisionsByNote[noteId] = revs
+            self.liveDraftNote = note
+            self.liveDraftRevision = newRevision
+        } catch {
+            // Incremental fallback handled in ASRAndLLMService
+        }
+    }
+
+    public func finalizeLiveStreamingRecording(for recordingId: UUID, selectedMode: NoteMode = .meetingNote) async {
+        guard let recIdx = recordings.firstIndex(where: { $0.id == recordingId }) else { return }
+        updateRecordingStatus(recordingId, status: .organizing, failureReason: nil)
+
+        // 1. 排空剩余切片队列
+        await drainLiveChunkQueue()
+
+        let pendingOrFailed = liveChunkQueue.filter { $0.status != .transcribed }
+        let hasUnfinishedChunks = !pendingOrFailed.isEmpty
+
+        // 确保所有已完成切片均完整归入逐字稿分段（PRD 边录边整理 需求 1 & 2 & 7）
+        var allSegments = segmentsByRecording[recordingId] ?? []
+        let existingIds = Set(allSegments.map(\.id))
+        for chunk in liveChunkQueue where chunk.status == .transcribed {
+            if let text = chunk.transcriptText, !text.isEmpty, !existingIds.contains(chunk.id.uuidString) {
+                allSegments.append(TranscriptSegment(
+                    id: chunk.id.uuidString,
+                    recordingId: recordingId,
+                    startMs: chunk.startMs,
+                    endMs: chunk.endMs,
+                    text: text
+                ))
+            }
+        }
+        allSegments.sort { $0.startMs < $1.startMs }
+        segmentsByRecording[recordingId] = allSegments
+
+        // 2. 最终整合并去重
+        let llmKey = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL)
+
+        do {
+            var output = try await ASRAndLLMService.shared.organizeTranscript(
+                recording: recordings[recIdx],
+                segments: allSegments,
+                requestedMode: selectedMode,
+                revisionId: UUID(),
+                preferences: preferences,
+                llmAPIKey: llmKey
+            )
+
+            // 3. 若存在未完成片段，严格依据要求 7 明确提示，绝不能把部分结果标记为完整
+            if hasUnfinishedChunks {
+                let warningPrefix = "⚠️ 注意：本次录音尚有 \(pendingOrFailed.count) 个切片片段未能完成转写，当前内容为阶段草稿，未标记为完整笔记。"
+                if output.noteContent.summaryOrShortNote.isEmpty || output.noteContent.summaryOrShortNote == "（暂无识别文字）" {
+                    output.noteContent.summaryOrShortNote = warningPrefix
+                } else {
+                    output.noteContent.summaryOrShortNote = warningPrefix + "\n" + output.noteContent.summaryOrShortNote
+                }
+                output.noteContent.backgroundPoints.insert(
+                    "⚠️ 注意：本次录音尚有 \(pendingOrFailed.count) 个切片片段未能完成转写，当前笔记为基于已转写内容的阶段草稿，原音频完整保留可随时回听。",
+                    at: 0
+                )
+            }
+
+            let noteId = notesByRecording[recordingId]?.id ?? UUID()
+            let finalRevId = UUID()
+            let finalRevision = NoteRevision(
+                id: finalRevId,
+                noteId: noteId,
+                mode: selectedMode,
+                generatedAt: Date(),
+                content: output.noteContent,
+                origin: .ai,
+                previousRevisionId: revisionsByNote[noteId]?.last?.id,
+                sourceTranscriptDigest: NoteVersionProvenance.transcriptDigest(for: allSegments),
+                basedOnTranscriptReviewed: false,
+                isLiveDraft: hasUnfinishedChunks
+            )
+
+            let note = Note(
+                id: noteId,
+                recordingId: recordingId,
+                mode: selectedMode,
+                editedAt: Date(),
+                currentRevisionId: finalRevId
+            )
+
+            self.notesByRecording[recordingId] = note
+            var revs = self.revisionsByNote[noteId] ?? []
+            revs.append(finalRevision)
+            self.revisionsByNote[noteId] = revs
+            self.actionDraftsByRecording[recordingId] = output.actionDrafts
+
+            if hasUnfinishedChunks {
+                updateRecordingStatus(
+                    recordingId,
+                    status: .transcriptNeedsReview,
+                    failureReason: "尚有 \(pendingOrFailed.count) 个音频切片转写未完成，已生成阶段笔记草稿"
+                )
+            } else {
+                updateRecordingStatus(recordingId, status: .completed, failureReason: nil)
+                recordings[recIdx].transcriptSource = TranscriptSource(
+                    fileName: recordings[recIdx].localAudioFileName,
+                    sha256: (try? AudioSourceValidation.fingerprint(audioService.audioFileURL(for: recordings[recIdx].localAudioFileName))) ?? "",
+                    audioDuration: recordings[recIdx].duration,
+                    engine: preferences.asrModelName + " · live",
+                    completedAt: Date()
+                )
+            }
+
+            if !hasUnfinishedChunks {
+                audioService.acknowledgeLiveChunks(for: recordingId)
+            }
+            self.liveStreamingProgress = nil
+            self.liveChunkQueue.removeAll()
+            self.liveChunkAudioURLs.removeAll()
+            saveToDisk()
+
+            if preferences.autoExportToObsidianOnComplete, !hasUnfinishedChunks {
+                _ = try? saveNoteDirectlyToObsidian(for: recordingId)
+            }
+        } catch {
+            updateRecordingStatus(recordingId, status: .failed, failureReason: error.localizedDescription)
         }
     }
 
@@ -376,6 +690,14 @@ public final class MemoFlowStore: ObservableObject {
         processingConsent.revokedAt = Date()
         processingConsent.mode = .askEveryTime
         saveToDisk()
+    }
+
+    /// 边录边整理录音前检查是否需要弹窗获取云端处理授权（PRD 边录边整理 需求 6）
+    public func requiresCloudConsentForLiveRecording() -> Bool {
+        let isLive = preferences.liveStreamingTranscriptionEnabled
+        let needsCloud = preferences.asrEngineMode.sendsAudioToCloud ||
+            !(KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? "").isEmpty
+        return isLive && needsCloud && !processingConsent.canAutoProcessWithoutPrompt
     }
 
     public func runProcessingPipeline(

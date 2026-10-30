@@ -104,6 +104,10 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
     public var customLLMModels: [String]
     /// 界面视觉主题风格（PRD V1.3 VIS-001）
     public var appearanceTheme: AppearanceTheme
+    /// 边录边整理模式开关（录音过程中持续分段转写，增量生成可查看的笔记草稿，停止后复用结果）
+    public var liveStreamingTranscriptionEnabled: Bool
+    /// 实时草稿更新频率（按新增录音时长，秒，默认 60 秒）
+    public var liveStreamingSummaryIntervalSeconds: Int
 
     public init(
         defaultNoteMode: NoteMode = .quickNote,
@@ -129,7 +133,9 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         userVoiceProfile: UserVoiceProfile? = nil,
         customASRModels: [String] = [],
         customLLMModels: [String] = [],
-        appearanceTheme: AppearanceTheme = .warmPaper
+        appearanceTheme: AppearanceTheme = .warmPaper,
+        liveStreamingTranscriptionEnabled: Bool = false,
+        liveStreamingSummaryIntervalSeconds: Int = 60
     ) {
         self.defaultNoteMode = defaultNoteMode
         self.asrEngineMode = asrEngineMode
@@ -151,6 +157,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.customASRModels = customASRModels
         self.customLLMModels = customLLMModels
         self.appearanceTheme = appearanceTheme
+        self.liveStreamingTranscriptionEnabled = liveStreamingTranscriptionEnabled
+        self.liveStreamingSummaryIntervalSeconds = liveStreamingSummaryIntervalSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -200,6 +208,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
         self.customASRModels = try c.decodeIfPresent([String].self, forKey: .customASRModels) ?? []
         self.customLLMModels = try c.decodeIfPresent([String].self, forKey: .customLLMModels) ?? []
         self.appearanceTheme = try c.decodeIfPresent(AppearanceTheme.self, forKey: .appearanceTheme) ?? .warmPaper
+        self.liveStreamingTranscriptionEnabled = try c.decodeIfPresent(Bool.self, forKey: .liveStreamingTranscriptionEnabled) ?? false
+        self.liveStreamingSummaryIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .liveStreamingSummaryIntervalSeconds) ?? 60
     }
 }
 

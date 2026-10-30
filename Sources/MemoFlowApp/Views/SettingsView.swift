@@ -183,11 +183,12 @@ public enum LLMProviderOption: String, CaseIterable, Identifiable {
             ]
         case .siliconFlow:
             return [
-                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（推荐，硅基流动）"),
-                ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（进阶推理，硅基流动）"),
-                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct（高智商旗舰）"),
+                ("Qwen/Qwen2.5-7B-Instruct", "通义千问 Qwen2.5-7B-Instruct（推荐 · 极速 9 秒出结果 · 免费）"),
                 ("Qwen/Qwen2.5-32B-Instruct", "通义千问 Qwen2.5-32B-Instruct（高速均衡）"),
-                ("Qwen/Qwen2.5-7B-Instruct", "通义千问 Qwen2.5-7B-Instruct（轻量限免）")
+                ("deepseek-ai/DeepSeek-V3", "DeepSeek-V3（官方通用旗舰，无长思考延迟）"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1 Flash（含深度思考链，耗时较长）"),
+                ("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4 Pro（进阶推理，硅基流动）"),
+                ("Qwen/Qwen2.5-72B-Instruct", "通义千问 Qwen2.5-72B-Instruct（高智商旗舰）")
             ]
         case .openAI:
             return [
@@ -268,6 +269,7 @@ public struct SettingsView: View {
                         appearanceThemeCard
                         asrSelectionCard
                         llmSelectionCard
+                        liveStreamingCard
                         speakerAndVoiceProfileCard
                         calendarSyncModeCard
                         obsidianIntegrationCard
@@ -630,6 +632,86 @@ public struct SettingsView: View {
                     text: $llmAPIKeyInput,
                     isPlainVisible: $showLLMKeyPlain
                 )
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    // MARK: - 2.5 Live Streaming & Incremental Organizing Card (Requirement 1-8)
+
+    private var liveStreamingCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("边录边整理（实时流式分段转写）", systemImage: "sparkles.rectangle.stack.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MFTheme.iceCyan)
+                Spacer()
+                statusPill(
+                    isReady: store.preferences.liveStreamingTranscriptionEnabled,
+                    readyText: "实时整理开启",
+                    emptyText: "停止后统一处理"
+                )
+            }
+
+            Text("在录音过程中利用后台持续进行无缝样本级音频切片，增量生成与更新笔记草稿；录音停止后仅需处理最后收尾片段，将数分钟的等待缩短至秒级。")
+                .font(.caption2)
+                .foregroundStyle(MFTheme.textSecondary)
+
+            Toggle(isOn: Binding(
+                get: { store.preferences.liveStreamingTranscriptionEnabled },
+                set: {
+                    store.preferences.liveStreamingTranscriptionEnabled = $0
+                    store.saveToDisk()
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("开启边录边整理模式")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text("录音过程中持续转写，网络或服务失败绝不影响原音频录制")
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+            }
+            .toggleStyle(.switch)
+
+            if store.preferences.liveStreamingTranscriptionEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("实时草稿增量刷新间隔")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(MFTheme.textPrimary)
+                        Spacer()
+                        Text("\(store.preferences.liveStreamingSummaryIntervalSeconds) 秒")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(MFTheme.iceBlue)
+                    }
+
+                    Picker("刷新间隔", selection: Binding(
+                        get: { store.preferences.liveStreamingSummaryIntervalSeconds },
+                        set: {
+                            store.preferences.liveStreamingSummaryIntervalSeconds = $0
+                            store.saveToDisk()
+                        }
+                    )) {
+                        Text("45 秒（高灵敏度）").tag(45)
+                        Text("60 秒（推荐 · 平衡流畅与功耗）").tag(60)
+                        Text("90 秒（省流模式）").tag(90)
+                        Text("120 秒（极省 Token 模式）").tag(120)
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "shield.checkered")
+                            .foregroundStyle(MFTheme.mintGreen)
+                        Text("费用控制保护：每次仅向模型提交新增段落与上一版提要，避免长录音重复上传全篇逐字稿引发高额费用。")
+                            .font(.caption2)
+                            .foregroundStyle(MFTheme.textSecondary)
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)

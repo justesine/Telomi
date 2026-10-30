@@ -916,6 +916,10 @@ private struct RecordingRowCard: View {
 
                 Spacer()
 
+                if rev?.isLiveDraft == true {
+                    MFBadgePill("实时草稿", color: MFTheme.warmAmber, icon: "pencil.and.outline")
+                }
+
                 statusBadge(for: rec.processingStatus)
             }
 
@@ -1086,6 +1090,7 @@ private struct RecordingRowCard: View {
             case .failed: return MFTheme.coralRed
             case .savedPendingTranscription: return MFTheme.warmAmber
             case .transcriptNeedsReview: return MFTheme.warmAmber
+            case .liveStreaming: return MFTheme.warmAmber
             default: return MFTheme.iceBlue
             }
         }()

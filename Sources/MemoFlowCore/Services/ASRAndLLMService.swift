@@ -214,6 +214,243 @@ public final class ASRAndLLMService: Sendable {
         }
     }
 
+    // MARK: - 边录边整理（实时切片转写与增量草稿更新）
+
+    /// 对单一切片执行实时转写，并按切片全局起点补偿时间戳（PRD 边录边整理）
+    public func transcribeSingleChunk(
+        fileURL: URL,
+        chunk: LiveAudioChunkJournalItem,
+        preferences: MemoFlowPreferences,
+        apiKey: String?
+    ) async throws -> [TranscriptSegment] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw ProcessingPipelineError.audioFileNotFound(fileURL.lastPathComponent)
+        }
+        let durationSec = Double(max(100, chunk.durationMs)) / 1000.0
+        var sourceRecording = Recording(
+            id: chunk.recordingId,
+            title: "LiveChunk-\(chunk.index)",
+            duration: durationSec,
+            localAudioFileName: fileURL.lastPathComponent
+        )
+
+        var readyURL = fileURL
+        var tempM4A: URL?
+        if fileURL.pathExtension.lowercased() == "caf" {
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent("chunk_\(chunk.id.uuidString).m4a")
+            let asset = AVURLAsset(url: fileURL)
+            if let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) {
+                exportSession.outputURL = temp
+                exportSession.outputFileType = .m4a
+                await exportSession.export()
+                if exportSession.status == .completed {
+                    readyURL = temp
+                    tempM4A = temp
+                }
+            }
+        }
+        defer {
+            if let tempM4A { try? FileManager.default.removeItem(at: tempM4A) }
+        }
+
+        var segments: [TranscriptSegment] = []
+        switch preferences.asrEngineMode {
+        case .appleOnDevice:
+            segments = try await transcribeWithAppleSpeech(fileURL: readyURL, recording: sourceRecording, preferences: preferences)
+        case .localWhisper:
+            #if os(macOS)
+            segments = try await transcribeWithLocalWhisper(fileURL: readyURL, recording: sourceRecording)
+            #else
+            segments = try await transcribeWithAppleSpeech(fileURL: readyURL, recording: sourceRecording, preferences: preferences)
+            #endif
+        case .openAICompatible:
+            let key = (apiKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else {
+                throw ProcessingPipelineError.missingAPIKey("语音转写 (ASR)")
+            }
+            segments = try await transcribeWithOpenAICompatibleAPI(
+                fileURL: readyURL,
+                recording: sourceRecording,
+                baseURL: preferences.asrBaseURL,
+                modelName: preferences.asrModelName,
+                apiKey: key
+            )
+        }
+
+        for i in segments.indices {
+            segments[i].recordingId = chunk.recordingId
+            segments[i].startMs += chunk.startMs
+            segments[i].endMs += chunk.startMs
+            segments[i].id = UUID().uuidString
+        }
+        return segments
+    }
+
+    /// 仅将新增录音片段与已有草稿合并，增量更新笔记草稿（控制费用与电量，PRD 边录边整理）
+    public func incrementallyUpdateLiveDraft(
+        existingContent: StructuredNoteContent?,
+        newSegments: [TranscriptSegment],
+        recording: Recording,
+        preferences: MemoFlowPreferences,
+        llmAPIKey: String?
+    ) async throws -> StructuredNoteContent {
+        guard !newSegments.isEmpty else {
+            return existingContent ?? StructuredNoteContent(
+                suggestedTitle: recording.title,
+                summaryOrShortNote: "（正在录音中，等待新内容输入...）"
+            )
+        }
+
+        let existing = existingContent ?? StructuredNoteContent(
+            suggestedTitle: recording.title,
+            summaryOrShortNote: ""
+        )
+
+        let trimmedKey = (llmAPIKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty && !preferences.llmModelName.isEmpty {
+            do {
+                return try await callIncrementalLLM(
+                    existing: existing,
+                    newSegments: newSegments,
+                    recording: recording,
+                    preferences: preferences,
+                    apiKey: trimmedKey
+                )
+            } catch {
+                return updateDraftLocallyWithHeuristics(existing: existing, newSegments: newSegments, recording: recording)
+            }
+        } else {
+            return updateDraftLocallyWithHeuristics(existing: existing, newSegments: newSegments, recording: recording)
+        }
+    }
+
+    private func updateDraftLocallyWithHeuristics(
+        existing: StructuredNoteContent,
+        newSegments: [TranscriptSegment],
+        recording: Recording
+    ) -> StructuredNoteContent {
+        var updated = existing
+        if updated.suggestedTitle.isEmpty || updated.suggestedTitle == recording.title {
+            if let firstText = newSegments.first?.text, firstText.count >= 4 {
+                updated.suggestedTitle = String(firstText.prefix(24)) + "（实时草稿）"
+            }
+        }
+
+        let newText = newSegments.map(\.text).joined(separator: " ")
+        if !newText.isEmpty {
+            if updated.summaryOrShortNote.isEmpty {
+                updated.summaryOrShortNote = newText
+            } else {
+                updated.summaryOrShortNote += "\n" + newText
+            }
+            let sentences = newText.split(whereSeparator: { "。！？!?\n".contains($0) }).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            for s in sentences where s.count >= 6 {
+                if !updated.keyPoints.contains(s) {
+                    updated.keyPoints.append(s)
+                }
+            }
+        }
+        return updated
+    }
+
+    private func callIncrementalLLM(
+        existing: StructuredNoteContent,
+        newSegments: [TranscriptSegment],
+        recording: Recording,
+        preferences: MemoFlowPreferences,
+        apiKey: String
+    ) async throws -> StructuredNoteContent {
+        let endpoint = try Self.endpoint(baseURL: preferences.llmBaseURL, path: "chat/completions")
+        let promptSegments = newSegments.map { "[\($0.formattedStartTime)] \($0.text)" }.joined(separator: "\n")
+        let systemPrompt = """
+        你是一个实时语音笔记增量生成助手。用户正在持续口述或开会，你需要根据【已有草稿】和刚刚新增的【增量录音片段】，增量扩充并完善结构化笔记。
+        返回且仅返回 JSON 对象，格式如下：
+        {
+          "suggestedTitle": "笔记标题（若已有标题合适可保留，若有更清晰主题可更新）",
+          "summaryOrShortNote": "整体综合摘要（在已有摘要基础上融入新内容）",
+          "backgroundPoints": ["背景要点1", "..."],
+          "keyPoints": ["核心观点1", "..."],
+          "decisions": ["决策结论1", "..."]
+        }
+        要求：
+        1. 仅根据真实听到的话语补充，严禁凭空编造事实或假设。
+        2. 保留已有核心结论，融入最新进展。
+        """
+
+        let userPrompt = """
+        已有草稿标题：\(existing.suggestedTitle)
+        已有草稿摘要：\(existing.summaryOrShortNote)
+        已有主要观点：\(existing.keyPoints.joined(separator: "；"))
+
+        刚刚新增的录音片段：
+        \(promptSegments)
+        """
+
+        var payload: [String: Any] = [
+            "model": preferences.llmModelName,
+            "temperature": 0.2,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userPrompt]
+            ]
+        ]
+        if ["api.deepseek.com", "api.openai.com", "api.siliconflow.cn"].contains(endpoint.host ?? "") {
+            payload["response_format"] = ["type": "json_object"]
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ProcessingPipelineError.invalidServerResponse((response as? HTTPURLResponse)?.statusCode ?? 500, "")
+        }
+
+        struct LLMResponse: Codable {
+            struct Choice: Codable {
+                struct Msg: Codable { let content: String }
+                let message: Msg
+            }
+            let choices: [Choice]
+        }
+        let decoded = try JSONDecoder().decode(LLMResponse.self, from: data)
+        guard let rawJSON = decoded.choices.first?.message.content else {
+            throw ProcessingPipelineError.networkFailure("LLM 返回空内容")
+        }
+        let cleanJSON = rawJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^```json", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "^```", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "```$", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        struct IncrementalJSON: Codable {
+            let suggestedTitle: String?
+            let summaryOrShortNote: String?
+            let backgroundPoints: [String]?
+            let keyPoints: [String]?
+            let decisions: [String]?
+        }
+        guard let parsedData = cleanJSON.data(using: .utf8),
+              let inc = try? JSONDecoder().decode(IncrementalJSON.self, from: parsedData) else {
+            return updateDraftLocallyWithHeuristics(existing: existing, newSegments: newSegments, recording: recording)
+        }
+
+        return StructuredNoteContent(
+            suggestedTitle: inc.suggestedTitle ?? existing.suggestedTitle,
+            summaryOrShortNote: inc.summaryOrShortNote ?? existing.summaryOrShortNote,
+            backgroundPoints: inc.backgroundPoints ?? existing.backgroundPoints,
+            keyPoints: inc.keyPoints ?? existing.keyPoints,
+            decisions: inc.decisions ?? existing.decisions,
+            chapters: existing.chapters,
+            historicalContextNotes: existing.historicalContextNotes,
+            aiInferences: existing.aiInferences
+        )
+    }
+
     private func transcribeWithOpenAICompatibleAPI(
         fileURL: URL,
         recording: Recording,
@@ -1058,7 +1295,7 @@ public final class ASRAndLLMService: Sendable {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        request.timeoutInterval = 600
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)

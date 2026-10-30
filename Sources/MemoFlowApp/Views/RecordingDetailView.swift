@@ -273,10 +273,18 @@ public struct RecordingDetailView: View {
                 )
                 Text("· \(rec.recordedTimeZoneIdentifier)")
                 if let rev = currentRevision {
-                    MFBadgePill(
-                        rev.origin == .userEdited ? "用户已编辑版本" : "AI 初稿",
-                        color: rev.origin == .userEdited ? MFTheme.iceCyan : MFTheme.textSecondary
-                    )
+                    if rev.isLiveDraft {
+                        MFBadgePill(
+                            "实时阶段草稿",
+                            color: MFTheme.warmAmber,
+                            icon: "sparkles"
+                        )
+                    } else {
+                        MFBadgePill(
+                            rev.origin == .userEdited ? "用户已编辑版本" : "AI 初稿",
+                            color: rev.origin == .userEdited ? MFTheme.iceCyan : MFTheme.textSecondary
+                        )
+                    }
                 }
                 MFBadgePill(
                     rec.transcriptReviewDisplayTitle,
@@ -634,32 +642,71 @@ public struct RecordingDetailView: View {
 
     @ViewBuilder
     private func processingStatusCard(rec: Recording) -> some View {
-        if rec.processingStatus != .completed {
+        let isLiveDraft = currentRevision?.isLiveDraft == true
+        let isCurrentlyRecordingThis = audioService.isRecording && audioService.activeRecordingId == rec.id
+
+        if rec.processingStatus != .completed || isLiveDraft {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label(rec.processingStatus.displayTitle, systemImage: "waveform.badge.exclamationmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(MFTheme.warmAmber)
+                    if isCurrentlyRecordingThis {
+                        Label("边录边整理进行中", systemImage: "waveform.badge.mic")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(MFTheme.iceCyan)
+                    } else if isLiveDraft {
+                        Label("阶段草稿（存在未完成切片）", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(MFTheme.warmAmber)
+                    } else {
+                        Label(rec.processingStatus.displayTitle, systemImage: "waveform.badge.exclamationmark")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(MFTheme.warmAmber)
+                    }
+
                     Spacer()
-                    let hasSegments = !(store.segmentsByRecording[rec.id]?.isEmpty ?? true)
-                    let buttonTitle: String = {
-                        if store.preferences.asrEngineMode == .localWhisper {
-                            return "重新生成机器逐字稿"
-                        } else if hasSegments {
-                            return "重新整理笔记"
-                        } else {
-                            return "立即重试转写与整理"
+
+                    if isCurrentlyRecordingThis {
+                        MFBadgePill("实时生成中", color: MFTheme.iceCyan, icon: "sparkles")
+                    } else if isLiveDraft {
+                        MFLuminousActionButton("合并为最终笔记", icon: "sparkles") {
+                            let mode = note?.mode ?? store.preferences.defaultNoteMode
+                            Task {
+                                await store.finalizeLiveStreamingRecording(for: rec.id, selectedMode: mode)
+                            }
                         }
-                    }()
-                    MFLuminousActionButton(buttonTitle, icon: hasSegments ? "sparkles" : "arrow.clockwise") {
-                        let mode = note?.mode ?? store.preferences.defaultNoteMode
-                        Task {
-                            await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: !hasSegments)
+                    } else {
+                        let hasSegments = !(store.segmentsByRecording[rec.id]?.isEmpty ?? true)
+                        let buttonTitle: String = {
+                            if store.preferences.asrEngineMode == .localWhisper {
+                                return "重新生成机器逐字稿"
+                            } else if hasSegments {
+                                return "重新整理笔记"
+                            } else {
+                                return "立即重试转写与整理"
+                            }
+                        }()
+                        MFLuminousActionButton(buttonTitle, icon: hasSegments ? "sparkles" : "arrow.clockwise") {
+                            let mode = note?.mode ?? store.preferences.defaultNoteMode
+                            Task {
+                                await store.runProcessingPipeline(for: rec.id, mode: mode, forceRetranscribe: !hasSegments)
+                            }
                         }
                     }
                 }
 
-                if let reason = rec.failureReason {
+                if isCurrentlyRecordingThis {
+                    if let progress = store.liveStreamingProgress {
+                        Text(progress.progressText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(MFTheme.iceCyan)
+                    }
+                    Text("当前呈现为边录边生成的实时草稿。停止录音后将自动完成最终合并与 Obsidian 同步。")
+                        .font(.caption)
+                        .foregroundStyle(MFTheme.textSecondary)
+                } else if isLiveDraft {
+                    Text("⚠️ 存在未完成切片或处理曾被中断，当前内容为阶段草稿，尚未标记为最终完整笔记。点击右上方按钮可继续处理剩余片段并合并。")
+                        .font(.caption)
+                        .foregroundStyle(MFTheme.warmAmber)
+                } else if let reason = rec.failureReason {
                     Text(reason)
                         .font(.caption)
                         .foregroundStyle(MFTheme.textSecondary)
@@ -669,7 +716,7 @@ public struct RecordingDetailView: View {
                         .foregroundStyle(MFTheme.textSecondary)
                 }
             }
-            .mfGlassCard(cornerRadius: 14, padding: 14, tint: MFTheme.warmAmber)
+            .mfGlassCard(cornerRadius: 14, padding: 14, tint: isCurrentlyRecordingThis ? MFTheme.iceCyan : MFTheme.warmAmber)
         }
     }
 

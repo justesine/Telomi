@@ -13,6 +13,22 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     @Published public var interruptionAlertMessage: String?
     @Published public private(set) var recordingBookmarks: [RecordingMark] = []
 
+    // MARK: - Live Streaming Chunking (PRD 边录边整理)
+    public var onLiveChunkAvailable: (@MainActor (LiveAudioChunkJournalItem, URL) -> Void)?
+    @Published public private(set) var activeLiveStreaming: Bool = false
+    public var targetChunkDurationSeconds: Double = 30.0
+
+    private var audioEngine: AVAudioEngine?
+    private var masterIntermediateAudioFile: AVAudioFile?
+    private var masterIntermediateURL: URL?
+    private var currentLiveChunkFile: AVAudioFile?
+    private var currentLiveChunkURL: URL?
+    private var currentLiveChunkIndex: Int = 0
+    private var currentLiveChunkStartMs: Int = 0
+    private var currentLiveChunkFrames: AVAudioFramePosition = 0
+    private var totalLiveValidFrames: AVAudioFramePosition = 0
+    private var liveSampleRate: Double = 44100.0
+
     // MARK: - Published Playback State (PRD R06 & R23)
     @Published public private(set) var playingRecordingId: UUID?
     @Published public private(set) var isPlaying: Bool = false
@@ -21,7 +37,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     @Published public private(set) var activeEvidenceEndMs: Int?
 
     private var audioRecorder: AVAudioRecorder?
-    private var activeRecordingId: UUID?
+    public private(set) var activeRecordingId: UUID?
     private var activeRecordingFileName: String?
     private var activeRecordingCreatedAt: Date?
 
@@ -41,10 +57,11 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
     private var journalURL: URL { recordingsDirectoryURL.appendingPathComponent("active-recording.json") }
 
     public func addRecordingBookmark() {
-        guard isRecording, let recorder = audioRecorder,
+        guard isRecording,
               let data = try? Data(contentsOf: journalURL),
               var journal = try? JSONDecoder().decode(RecordingJournal.self, from: data) else { return }
-        let mark = RecordingMark(startMs: Int(max(0, recorder.currentTime) * 1000))
+        let currentSec = audioRecorder?.currentTime ?? currentRecordingDuration
+        let mark = RecordingMark(startMs: Int(max(0, currentSec) * 1000))
         journal.marks = recordingBookmarks + [mark]
         do {
             try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
@@ -57,12 +74,85 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         guard !isRecording, let data = try? Data(contentsOf: journalURL),
               let journal = try? JSONDecoder().decode(RecordingJournal.self, from: data) else { return nil }
         let url = audioFileURL(for: journal.fileName)
-        guard journal.fileName == "rec_\(journal.id.uuidString).m4a",
-              let player = try? AVAudioPlayer(contentsOf: url), player.duration > 0 else {
+        // 若处于流式录音中途异常退出，检查是否存在 master.caf 临时文件并尝试复原
+        let chunkDir = recordingsDirectoryURL.appendingPathComponent("live_chunks_\(journal.id.uuidString)")
+        let masterCaf = chunkDir.appendingPathComponent("master.caf")
+        if !FileManager.default.fileExists(atPath: url.path), FileManager.default.fileExists(atPath: masterCaf.path) {
+            let asset = AVURLAsset(url: masterCaf)
+            if let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) {
+                exportSession.outputURL = url
+                exportSession.outputFileType = .m4a
+                let sema = DispatchSemaphore(value: 0)
+                exportSession.exportAsynchronously { sema.signal() }
+                _ = sema.wait(timeout: .now() + 5.0)
+            }
+        }
+
+        guard let player = try? AVAudioPlayer(contentsOf: url), player.duration > 0 else {
             interruptionAlertMessage = "发现未完成录音，原文件已保留，但暂时无法读取。请保留文件以便恢复。"
             return nil
         }
         return (journal, player.duration)
+    }
+
+    public func liveChunksJournalURL(for recordingId: UUID) -> URL {
+        recordingsDirectoryURL.appendingPathComponent("live_chunks_\(recordingId.uuidString)/journal.json")
+    }
+
+    public func loadLiveChunksJournal(for recordingId: UUID) -> [LiveAudioChunkJournalItem] {
+        let url = liveChunksJournalURL(for: recordingId)
+        guard let data = try? Data(contentsOf: url),
+              let items = try? JSONDecoder().decode([LiveAudioChunkJournalItem].self, from: data) else {
+            return []
+        }
+        return items
+    }
+
+    public func saveLiveChunksJournal(_ items: [LiveAudioChunkJournalItem], for recordingId: UUID) {
+        let url = liveChunksJournalURL(for: recordingId)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(items).write(to: url, options: .atomic)
+    }
+
+    public func appendLiveChunkToJournal(_ item: LiveAudioChunkJournalItem, for recordingId: UUID) {
+        var items = loadLiveChunksJournal(for: recordingId)
+        if let idx = items.firstIndex(where: { $0.id == item.id || $0.index == item.index }) {
+            items[idx] = item
+        } else {
+            items.append(item)
+        }
+        saveLiveChunksJournal(items, for: recordingId)
+    }
+
+    public func acknowledgeLiveChunks(for recordingId: UUID) {
+        let chunkDir = recordingsDirectoryURL.appendingPathComponent("live_chunks_\(recordingId.uuidString)")
+        try? FileManager.default.removeItem(at: chunkDir)
+    }
+
+    @discardableResult
+    public func simulateFeedLiveChunk(
+        for recordingId: UUID,
+        chunkIndex: Int,
+        startMs: Int,
+        endMs: Int,
+        durationSeconds: Double = 5.0
+    ) -> (LiveAudioChunkJournalItem, URL) {
+        let chunkDir = recordingsDirectoryURL.appendingPathComponent("live_chunks_\(recordingId.uuidString)")
+        try? FileManager.default.createDirectory(at: chunkDir, withIntermediateDirectories: true)
+        let chunkFileName = "chunk_\(chunkIndex).wav"
+        let chunkURL = chunkDir.appendingPathComponent(chunkFileName)
+        _ = ensurePlayableDemoAudioFile(named: "live_chunks_\(recordingId.uuidString)/\(chunkFileName)", durationSeconds: durationSeconds)
+        let item = LiveAudioChunkJournalItem(
+            recordingId: recordingId,
+            index: chunkIndex,
+            startMs: startMs,
+            endMs: endMs,
+            fileName: chunkFileName,
+            status: .pending
+        )
+        appendLiveChunkToJournal(item, for: recordingId)
+        onLiveChunkAvailable?(item, chunkURL)
+        return (item, chunkURL)
     }
 
     public func acknowledgeSavedRecording(id: UUID) {
@@ -107,7 +197,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #endif
     }
 
-    public func startRecording() async throws -> (id: UUID, fileName: String, createdAt: Date) {
+    public func startRecording(liveStreaming: Bool = false) async throws -> (id: UUID, fileName: String, createdAt: Date) {
         guard !isRecording, !FileManager.default.fileExists(atPath: journalURL.path) else {
             throw NSError(domain: "MemoFlowAudio", code: 409,
                 userInfo: [NSLocalizedDescriptionKey: "请先保存或恢复上一段录音，再开始新录音。"])
@@ -134,6 +224,67 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         let createdAt = Date()
         let fileName = "rec_\(id.uuidString).m4a"
         let fileURL = audioFileURL(for: fileName)
+
+        if liveStreaming {
+            let chunkDir = recordingsDirectoryURL.appendingPathComponent("live_chunks_\(id.uuidString)")
+            try FileManager.default.createDirectory(at: chunkDir, withIntermediateDirectories: true)
+            let masterURL = chunkDir.appendingPathComponent("master.caf")
+
+            let engine = AVAudioEngine()
+            let input = engine.inputNode
+            let format = input.outputFormat(forBus: 0)
+            self.liveSampleRate = format.sampleRate > 0 ? format.sampleRate : 44100.0
+
+            let masterFile = try AVAudioFile(forWriting: masterURL, settings: format.settings)
+            self.masterIntermediateURL = masterURL
+            self.masterIntermediateAudioFile = masterFile
+
+            self.currentLiveChunkIndex = 0
+            self.currentLiveChunkStartMs = 0
+            self.currentLiveChunkFrames = 0
+            self.totalLiveValidFrames = 0
+
+            let chunk0URL = chunkDir.appendingPathComponent("chunk_0.caf")
+            self.currentLiveChunkURL = chunk0URL
+            self.currentLiveChunkFile = try AVAudioFile(forWriting: chunk0URL, settings: format.settings)
+
+            let targetFrames = AVAudioFramePosition(self.liveSampleRate * self.targetChunkDurationSeconds)
+
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                guard let self else { return }
+                guard !self.isPaused else { return }
+                try? self.masterIntermediateAudioFile?.write(from: buffer)
+                try? self.currentLiveChunkFile?.write(from: buffer)
+                self.currentLiveChunkFrames += AVAudioFramePosition(buffer.frameLength)
+                self.totalLiveValidFrames += AVAudioFramePosition(buffer.frameLength)
+
+                if self.currentLiveChunkFrames >= targetFrames {
+                    Task { @MainActor [weak self] in
+                        self?.rotateLiveChunk()
+                    }
+                }
+            }
+
+            try engine.start()
+            self.audioEngine = engine
+            self.activeLiveStreaming = true
+            self.activeRecordingId = id
+            self.activeRecordingFileName = fileName
+            self.activeRecordingCreatedAt = createdAt
+            self.isRecording = true
+            self.isPaused = false
+            self.currentRecordingDuration = 0
+            self.interruptionAlertMessage = nil
+            self.mediaServicesWereReset = false
+            self.shouldResumeAfterInterruption = false
+            self.recordingBookmarks = []
+
+            let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt)
+            try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+
+            startMeterTimer()
+            return (id, fileName, createdAt)
+        }
 
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -172,6 +323,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         }
 
         self.audioRecorder = recorder
+        self.activeLiveStreaming = false
         self.activeRecordingId = id
         self.activeRecordingFileName = fileName
         self.activeRecordingCreatedAt = createdAt
@@ -187,18 +339,53 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         return (id, fileName, createdAt)
     }
 
+    /// 轮转当前流式分段并通知监听者（PRD 边录边整理）
+    public func rotateLiveChunk() {
+        guard activeLiveStreaming, let chunkURL = currentLiveChunkURL, let id = activeRecordingId else { return }
+        currentLiveChunkFile = nil
+        let endMs = Int((Double(totalLiveValidFrames) / max(1.0, liveSampleRate)) * 1000)
+        let item = LiveAudioChunkJournalItem(
+            recordingId: id,
+            index: currentLiveChunkIndex,
+            startMs: currentLiveChunkStartMs,
+            endMs: endMs,
+            fileName: chunkURL.lastPathComponent,
+            status: .pending
+        )
+        appendLiveChunkToJournal(item, for: id)
+        let emittedURL = chunkURL
+        onLiveChunkAvailable?(item, emittedURL)
+
+        currentLiveChunkIndex += 1
+        currentLiveChunkStartMs = endMs
+        currentLiveChunkFrames = 0
+        let chunkDir = recordingsDirectoryURL.appendingPathComponent("live_chunks_\(id.uuidString)")
+        let nextURL = chunkDir.appendingPathComponent("chunk_\(currentLiveChunkIndex).caf")
+        currentLiveChunkURL = nextURL
+        if let format = audioEngine?.inputNode.outputFormat(forBus: 0) {
+            currentLiveChunkFile = try? AVAudioFile(forWriting: nextURL, settings: format.settings)
+        }
+    }
+
     /// 暂停录音（PRD R02 & A03：暂停段不计入有效音频）
     public func pauseRecording() {
-        guard isRecording, !isPaused, let recorder = audioRecorder else { return }
+        guard isRecording, !isPaused else { return }
         shouldResumeAfterInterruption = false
-        recorder.pause()
-        currentRecordingDuration = recorder.currentTime
-        isPaused = true
+        if activeLiveStreaming {
+            isPaused = true
+            if currentLiveChunkFrames >= AVAudioFramePosition(liveSampleRate * 2.0) {
+                rotateLiveChunk()
+            }
+        } else if let recorder = audioRecorder {
+            recorder.pause()
+            currentRecordingDuration = recorder.currentTime
+            isPaused = true
+        }
     }
 
     /// 继续录音（PRD R02 & A03）
     public func resumeRecording() {
-        guard isRecording, isPaused, let recorder = audioRecorder else { return }
+        guard isRecording, isPaused else { return }
         guard !mediaServicesWereReset else {
             interruptionAlertMessage = "系统音频服务已重置，请先完成保存，再开始新录音。"
             return
@@ -207,12 +394,17 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #if os(iOS)
         try AVAudioSession.sharedInstance().setActive(true)
         #endif
-        guard recorder.record() else {
-            interruptionAlertMessage = "无法恢复麦克风，录音仍暂停。请重试或保存已有片段。"
-            return
+        if activeLiveStreaming {
+            isPaused = false
+            interruptionAlertMessage = nil
+        } else if let recorder = audioRecorder {
+            guard recorder.record() else {
+                interruptionAlertMessage = "无法恢复麦克风，录音仍暂停。请重试或保存已有片段。"
+                return
+            }
+            isPaused = false
+            interruptionAlertMessage = nil
         }
-        isPaused = false
-        interruptionAlertMessage = nil
         } catch {
             interruptionAlertMessage = "恢复录音失败：\(error.localizedDescription)。已录片段保留。"
         }
@@ -220,13 +412,55 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
 
     /// 完成并保存本地录音（PRD R02, R04, R26：先落盘保存并返回真实时长）
     public func finishRecording() -> (id: UUID, fileName: String, createdAt: Date, duration: TimeInterval)? {
-        guard let recorder = audioRecorder,
-              let id = activeRecordingId,
+        guard let id = activeRecordingId,
               let fileName = activeRecordingFileName,
               let createdAt = activeRecordingCreatedAt else {
             return nil
         }
 
+        if activeLiveStreaming {
+            if currentLiveChunkFrames > 0 {
+                rotateLiveChunk()
+            }
+            audioEngine?.stop()
+            audioEngine?.inputNode.removeTap(onBus: 0)
+            audioEngine = nil
+            currentLiveChunkFile = nil
+            masterIntermediateAudioFile = nil
+            stopMeterTimer()
+
+            let measuredDuration = Double(totalLiveValidFrames) / max(1.0, liveSampleRate)
+            let finalFileURL = audioFileURL(for: fileName)
+            if let masterURL = masterIntermediateURL, FileManager.default.fileExists(atPath: masterURL.path) {
+                let asset = AVURLAsset(url: masterURL)
+                if let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) {
+                    exportSession.outputURL = finalFileURL
+                    exportSession.outputFileType = .m4a
+                    let sema = DispatchSemaphore(value: 0)
+                    exportSession.exportAsynchronously { sema.signal() }
+                    _ = sema.wait(timeout: .now() + 5.0)
+                }
+                if !FileManager.default.fileExists(atPath: finalFileURL.path) {
+                    try? FileManager.default.copyItem(at: masterURL, to: finalFileURL)
+                }
+            }
+
+            let finalDuration = (try? AVAudioPlayer(contentsOf: finalFileURL).duration) ?? measuredDuration
+            self.activeLiveStreaming = false
+            self.activeRecordingId = nil
+            self.activeRecordingFileName = nil
+            self.activeRecordingCreatedAt = nil
+            self.isRecording = false
+            self.isPaused = false
+            self.shouldResumeAfterInterruption = false
+            self.currentRecordingDuration = 0
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
+            return (id, fileName, createdAt, finalDuration)
+        }
+
+        guard let recorder = audioRecorder else { return nil }
         let measuredDuration = max(currentRecordingDuration, recorder.currentTime)
         recorder.stop()
         let finalDuration = (try? AVAudioPlayer(contentsOf: recorder.url).duration) ?? measuredDuration
@@ -245,6 +479,13 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #endif
 
         return (id, fileName, createdAt, finalDuration)
+    }
+
+    /// 为测试或测试用例提供受控录制状态设置
+    public func setRecordingStateForTesting(isRecording: Bool, isPaused: Bool = false, recordingId: UUID? = nil) {
+        self.isRecording = isRecording
+        self.isPaused = isPaused
+        self.activeRecordingId = recordingId
     }
 
     /// 为测试或演示生成一段真实可播放的本地静音/轻提示音音频文件（便于无麦克风环境下验证播放器与导出）
@@ -410,7 +651,17 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         stopMeterTimer()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let recorder = self.audioRecorder, self.isRecording, !self.isPaused else { return }
+                guard let self, self.isRecording, !self.isPaused else { return }
+                if self.activeLiveStreaming {
+                    self.currentRecordingDuration = Double(self.totalLiveValidFrames) / max(1.0, self.liveSampleRate)
+                    var nextSamples = self.waveformSamples
+                    if !nextSamples.isEmpty { nextSamples.removeFirst() }
+                    let pulse = Float(0.12 + 0.35 * sin(self.currentRecordingDuration * 6.0))
+                    nextSamples.append(max(0.08, min(0.85, pulse)))
+                    self.waveformSamples = nextSamples
+                    return
+                }
+                guard let recorder = self.audioRecorder else { return }
                 guard recorder.isRecording else {
                     self.isPaused = true
                     self.interruptionAlertMessage = "录音已停止接收声音，请继续录音或保存已有片段。"

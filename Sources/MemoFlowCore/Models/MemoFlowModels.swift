@@ -9,6 +9,7 @@ public enum RecordingProcessingStatus: String, Codable, CaseIterable, Sendable {
     case uploading = "uploading"
     case transcribing = "transcribing"
     case transcriptNeedsReview = "transcript_needs_review"
+    case liveStreaming = "live_streaming"
     case organizing = "organizing"
     case completed = "completed"
     case failed = "failed"
@@ -16,6 +17,7 @@ public enum RecordingProcessingStatus: String, Codable, CaseIterable, Sendable {
     public var displayTitle: String {
         switch self {
         case .recording: return "录音中"
+        case .liveStreaming: return "边录边整理中"
         case .savedPendingTranscription: return "已安全保存·待转写"
         case .uploading: return "上传中"
         case .transcribing: return "转写中"
@@ -540,6 +542,8 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
     public var sourceTranscriptDigest: String?
     /// 生成本版摘要时逐字稿是否已人工校对
     public var basedOnTranscriptReviewed: Bool?
+    /// 是否为录音过程中的流式增量草稿（true 为未定稿的实时草稿，false 为整理完成的正式笔记）
+    public var isLiveDraft: Bool = false
 
     public init(
         id: UUID = UUID(),
@@ -550,7 +554,8 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
         origin: RevisionOrigin,
         previousRevisionId: UUID? = nil,
         sourceTranscriptDigest: String? = nil,
-        basedOnTranscriptReviewed: Bool? = nil
+        basedOnTranscriptReviewed: Bool? = nil,
+        isLiveDraft: Bool = false
     ) {
         self.id = id
         self.noteId = noteId
@@ -561,6 +566,21 @@ public struct NoteRevision: Identifiable, Codable, Equatable, Sendable {
         self.previousRevisionId = previousRevisionId
         self.sourceTranscriptDigest = sourceTranscriptDigest
         self.basedOnTranscriptReviewed = basedOnTranscriptReviewed
+        self.isLiveDraft = isLiveDraft
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.noteId = try c.decode(UUID.self, forKey: .noteId)
+        self.mode = try c.decode(NoteMode.self, forKey: .mode)
+        self.generatedAt = try c.decode(Date.self, forKey: .generatedAt)
+        self.content = try c.decode(StructuredNoteContent.self, forKey: .content)
+        self.origin = try c.decode(RevisionOrigin.self, forKey: .origin)
+        self.previousRevisionId = try c.decodeIfPresent(UUID.self, forKey: .previousRevisionId)
+        self.sourceTranscriptDigest = try c.decodeIfPresent(String.self, forKey: .sourceTranscriptDigest)
+        self.basedOnTranscriptReviewed = try c.decodeIfPresent(Bool.self, forKey: .basedOnTranscriptReviewed)
+        self.isLiveDraft = try c.decodeIfPresent(Bool.self, forKey: .isLiveDraft) ?? false
     }
 }
 
@@ -1282,6 +1302,124 @@ public struct ProcessingJob: Identifiable, Codable, Equatable, Sendable {
         self.errorCode = errorCode
         self.attempts = attempts
         self.updatedAt = updatedAt
+    }
+}
+
+// MARK: - 边录边整理（实时流式转写与增量草稿）数据模型
+
+/// 流式音频分段状态
+public enum LiveChunkStatus: String, Codable, CaseIterable, Sendable {
+    case pending = "pending"
+    case transcribing = "transcribing"
+    case transcribed = "transcribed"
+    case failed = "failed"
+
+    public var displayTitle: String {
+        switch self {
+        case .pending: return "排队中"
+        case .transcribing: return "转写中"
+        case .transcribed: return "已完成"
+        case .failed: return "需重试"
+        }
+    }
+}
+
+/// 流式录音切片日记项（保证网络中断恢复与异常退出续传）
+public struct LiveAudioChunkJournalItem: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var recordingId: UUID
+    public var index: Int
+    public var startMs: Int
+    public var endMs: Int
+    public var fileName: String
+    public var status: LiveChunkStatus
+    public var retryCount: Int
+    public var transcriptText: String?
+    public var errorDescription: String?
+    public var createdAt: Date
+    public var completedAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        recordingId: UUID,
+        index: Int,
+        startMs: Int,
+        endMs: Int,
+        fileName: String,
+        status: LiveChunkStatus = .pending,
+        retryCount: Int = 0,
+        transcriptText: String? = nil,
+        errorDescription: String? = nil,
+        createdAt: Date = Date(),
+        completedAt: Date? = nil
+    ) {
+        self.id = id
+        self.recordingId = recordingId
+        self.index = index
+        self.startMs = startMs
+        self.endMs = endMs
+        self.fileName = fileName
+        self.status = status
+        self.retryCount = retryCount
+        self.transcriptText = transcriptText
+        self.errorDescription = errorDescription
+        self.createdAt = createdAt
+        self.completedAt = completedAt
+    }
+
+    public var durationMs: Int {
+        max(0, endMs - startMs)
+    }
+}
+
+/// 实时边录边整理进度与草稿状态追踪
+public struct LiveStreamingProgress: Codable, Equatable, Sendable {
+    public var recordingId: UUID
+    public var totalAudioDurationMs: Int
+    public var transcribedDurationMs: Int
+    public var pendingChunksCount: Int
+    public var processedChunksCount: Int
+    public var failedChunksCount: Int
+    public var isLiveDraft: Bool
+    public var lastSummaryUpdateMs: Int
+    public var statusMessage: String
+
+    public init(
+        recordingId: UUID,
+        totalAudioDurationMs: Int = 0,
+        transcribedDurationMs: Int = 0,
+        pendingChunksCount: Int = 0,
+        processedChunksCount: Int = 0,
+        failedChunksCount: Int = 0,
+        isLiveDraft: Bool = true,
+        lastSummaryUpdateMs: Int = 0,
+        statusMessage: String = ""
+    ) {
+        self.recordingId = recordingId
+        self.totalAudioDurationMs = totalAudioDurationMs
+        self.transcribedDurationMs = transcribedDurationMs
+        self.pendingChunksCount = pendingChunksCount
+        self.processedChunksCount = processedChunksCount
+        self.failedChunksCount = failedChunksCount
+        self.isLiveDraft = isLiveDraft
+        self.lastSummaryUpdateMs = lastSummaryUpdateMs
+        self.statusMessage = statusMessage
+    }
+
+    public var progressText: String {
+        let transcribedSec = Double(transcribedDurationMs) / 1000.0
+        let totalSec = Double(totalAudioDurationMs) / 1000.0
+        let transcribedStr = TimeFormatting.formatDuration(transcribedSec)
+        let totalStr = TimeFormatting.formatDuration(totalSec)
+        if failedChunksCount > 0 {
+            return "已转写 \(transcribedStr) / 录制 \(totalStr) · \(failedChunksCount) 段需重试"
+        }
+        return "已转写 \(transcribedStr) / 录制 \(totalStr) · 待处理 \(pendingChunksCount) 段"
+    }
+
+    public var completionRatio: Double {
+        guard totalAudioDurationMs > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(transcribedDurationMs) / Double(totalAudioDurationMs)))
     }
 }
 
