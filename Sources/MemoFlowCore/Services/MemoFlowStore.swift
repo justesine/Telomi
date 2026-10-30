@@ -23,6 +23,7 @@ public final class MemoFlowStore: ObservableObject {
     @Published public var externalLinksByConfirmedAction: [UUID: ExternalActionLink] = [:]
     @Published public var operationLogs: [ActionOperationLog] = []
     @Published public var markdownExportsByRecording: [UUID: [MarkdownExport]] = [:]
+    @Published public var obsidianBindingsByRecording: [UUID: ObsidianNoteBinding] = [:]
     @Published public var processingConsent: ProcessingConsent = ProcessingConsent()
     @Published public var processingJobsByRecording: [UUID: ProcessingJob] = [:]
     @Published public var preferences: MemoFlowPreferences = MemoFlowPreferences()
@@ -35,7 +36,12 @@ public final class MemoFlowStore: ObservableObject {
     @Published public var knowledgeStatus: String = "选择知识库并开启背景辅助后，将在本机建立索引。"
     @Published public var isRefreshingKnowledge = false
     private let knowledgeService = ObsidianKnowledgeService()
+    public let obsidianSyncService = ObsidianNoteSyncService()
     private var activePipelineRecordingIds = Set<UUID>()
+
+    public var obsidianBackupsDirectoryURL: URL {
+        persistenceURL.deletingLastPathComponent().appendingPathComponent("MemoFlowVaultBackups", isDirectory: true)
+    }
 
     public func bindObsidianVault(_ url: URL) {
         do {
@@ -593,6 +599,8 @@ public final class MemoFlowStore: ObservableObject {
             suggestedMode: output.suggestedMode,
             projectName: existingNote?.projectName ?? output.suggestedProjectName,
             projectReference: existingNote?.projectReference,
+            userSupplement: existingNote?.userSupplement ?? "",
+            manualTags: existingNote?.manualTags ?? [],
             editedAt: Date(),
             currentRevisionId: revisionId
         )
@@ -653,17 +661,23 @@ public final class MemoFlowStore: ObservableObject {
         for recordingId: UUID,
         newTitle: String,
         newContent: StructuredNoteContent,
-        projectName: String?
+        projectName: String?,
+        userSupplement: String? = nil,
+        manualTags: [String]? = nil
     ) {
         if let idx = recordings.firstIndex(where: { $0.id == recordingId }) {
             recordings[idx].title = newTitle
         }
         guard var note = notesByRecording[recordingId] else { return }
+        var updatedStructured = newContent
+        if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updatedStructured.suggestedTitle = newTitle
+        }
         let newRev = NoteRevision(
             noteId: note.id,
             mode: note.mode,
             generatedAt: Date(),
-            content: newContent,
+            content: updatedStructured,
             origin: .userEdited,
             previousRevisionId: note.currentRevisionId
         )
@@ -673,10 +687,16 @@ public final class MemoFlowStore: ObservableObject {
 
         note.currentRevisionId = newRev.id
         note.editedAt = Date()
-        let trimmedProject = projectName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        note.projectName = (trimmedProject?.isEmpty == true) ? nil : trimmedProject
+        let trimmedProject = MarkdownExporterService.unwrapProjectWikiLink(projectName)
+        note.projectName = trimmedProject
         if let validProj = note.projectName, !preferences.knownProjectNames.contains(validProj) {
             preferences.knownProjectNames.append(validProj)
+        }
+        if let supplement = userSupplement {
+            note.userSupplement = supplement
+        }
+        if let tags = manualTags {
+            note.manualTags = tags
         }
         notesByRecording[recordingId] = note
         saveToDisk()
@@ -854,7 +874,8 @@ public final class MemoFlowStore: ObservableObject {
     public func recordMarkdownExportResult(
         for recordingId: UUID,
         result: ShareExportResult,
-        destinationPath: String? = nil
+        destinationPath: String? = nil,
+        vaultRelativePath: String? = nil
     ) {
         let confirmedIds = (confirmedActionsByRecording[recordingId] ?? []).map(\.id)
         let exportRecord = MarkdownExport(
@@ -862,7 +883,8 @@ public final class MemoFlowStore: ObservableObject {
             confirmedActionIds: confirmedIds,
             createdAt: Date(),
             shareResult: result,
-            destinationPath: destinationPath
+            destinationPath: destinationPath,
+            vaultRelativePath: vaultRelativePath
         )
         var list = markdownExportsByRecording[recordingId] ?? []
         list.append(exportRecord)
@@ -874,43 +896,158 @@ public final class MemoFlowStore: ObservableObject {
         (markdownExportsByRecording[recordingId] ?? []).contains(where: { $0.shareResult == .completed })
     }
 
-    /// 一键将当前录音的整理结果写入已授权的 Obsidian 笔记库（PRD R15）
+    /// 将当前录音的整理结果稳定写入或原位受控更新同一篇 Obsidian 笔记（P0：稳定 recording_id 绑定 + 手写保护 + 冲突检测 + 写入前备份）
     @discardableResult
-    public func saveNoteDirectlyToObsidian(for recordingId: UUID) throws -> (fileURL: URL, obsidianOpenURL: URL?) {
+    public func saveNoteDirectlyToObsidian(
+        for recordingId: UUID,
+        legacyResolution: ObsidianLegacyResolution = .requireUserConfirmation
+    ) throws -> (fileURL: URL, obsidianOpenURL: URL?) {
         guard let rec = recordings.first(where: { $0.id == recordingId }),
               let note = notesByRecording[recordingId],
               let rev = currentRevision(for: recordingId) else {
             throw NSError(domain: "MemoFlowObsidian", code: 404, userInfo: [NSLocalizedDescriptionKey: "未找到可导出的笔记版本，请先完成转写整理。"])
         }
-        guard let vaultRoot = preferences.obsidianVaultRootPath, !vaultRoot.isEmpty else {
-            throw NSError(domain: "MemoFlowObsidian", code: 400, userInfo: [NSLocalizedDescriptionKey: "尚未选择 Obsidian 笔记库文件夹，请先在设置或弹窗中选择目录。"])
-        }
 
         let confirmed = confirmedActionsByRecording[recordingId] ?? []
         let segs = segmentsByRecording[recordingId] ?? []
         let pending = actionDraftsByRecording[recordingId] ?? []
-        let md = MarkdownExporterService.generateMarkdown(
-            recording: rec,
-            note: note,
-            revision: rev,
-            confirmedActions: confirmed,
-            segments: segs,
-            pendingDrafts: pending
-        )
+        let currentBinding = obsidianBindingsByRecording[recordingId]
 
-        let root = try VaultAccess.resolve(preferences)
+        do {
+            let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+            let accessed = root.startAccessingSecurityScopedResource()
+            defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+            let outcome = try obsidianSyncService.exportOrUpdateNote(
+                recording: rec,
+                note: note,
+                revision: rev,
+                confirmedActions: confirmed,
+                segments: segs,
+                pendingDrafts: pending,
+                vaultRootURL: root,
+                targetSubfolder: preferences.obsidianTargetSubfolder,
+                existingBinding: currentBinding,
+                backupsRootURL: obsidianBackupsDirectoryURL,
+                legacyResolution: legacyResolution
+            )
+
+            obsidianBindingsByRecording[recordingId] = outcome.binding
+            recordMarkdownExportResult(
+                for: recordingId,
+                result: .completed,
+                destinationPath: outcome.binding.vaultRelativePath,
+                vaultRelativePath: outcome.binding.vaultRelativePath
+            )
+
+            if !outcome.binding.conflicts.isEmpty {
+                lastBannerFeedback = "已更新「\(outcome.fileURL.lastPathComponent)」，发现 \(outcome.binding.conflicts.count) 处双方修改冲突，已在笔记内同时保留双方版本待你选择。"
+            } else if let oldRel = outcome.relocatedFromOldPath {
+                lastBannerFeedback = "已按录音 ID 重新定位移动/重命名后的笔记（\(oldRel) → \(outcome.binding.vaultRelativePath)）并原位更新。"
+            } else if outcome.wasCreatedNew {
+                lastBannerFeedback = "已在 Obsidian 创建绑定笔记：\(outcome.binding.vaultRelativePath)"
+            } else {
+                lastBannerFeedback = "已原位更新固定 Obsidian 笔记：\(outcome.binding.vaultRelativePath)（手写内容与标签已保留）"
+            }
+            return (outcome.fileURL, outcome.obsidianOpenURL)
+        } catch let syncErr as ObsidianSyncError {
+            var updated = currentBinding ?? ObsidianNoteBinding(
+                recordingId: recordingId,
+                vaultRelativePath: "",
+                lastKnownFileName: ""
+            )
+            switch syncErr {
+            case .legacyNoteConfirmationRequired(let candidates):
+                updated.status = .needsLegacyConfirmation
+                updated.pendingLegacyCandidatePaths = candidates
+                updated.lastErrorMessage = syncErr.errorDescription
+                obsidianBindingsByRecording[recordingId] = updated
+            case .cloudFileNotDownloaded(let relPath):
+                if updated.vaultRelativePath.isEmpty { updated.vaultRelativePath = relPath }
+                updated.status = .cloudNotDownloaded
+                updated.lastErrorMessage = syncErr.errorDescription
+                obsidianBindingsByRecording[recordingId] = updated
+            case .authorizationExpired(let msg):
+                updated.status = .authorizationExpired
+                updated.lastErrorMessage = msg
+                obsidianBindingsByRecording[recordingId] = updated
+            default:
+                updated.lastErrorMessage = syncErr.errorDescription
+                if currentBinding != nil {
+                    obsidianBindingsByRecording[recordingId] = updated
+                }
+            }
+            lastBannerFeedback = syncErr.localizedDescription
+            saveToDisk()
+            throw syncErr
+        } catch {
+            lastBannerFeedback = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// 用户审阅后确认关联缺少录音 ID 的同名历史笔记（保留历史笔记手写正文并绑定当前录音 ID）
+    @discardableResult
+    public func associateLegacyObsidianNote(
+        for recordingId: UUID,
+        relativePath: String
+    ) throws -> (fileURL: URL, obsidianOpenURL: URL?) {
+        try saveNoteDirectlyToObsidian(
+            for: recordingId,
+            legacyResolution: .associateExisting(relativePath: relativePath)
+        )
+    }
+
+    /// 用户审阅后选择不覆盖历史同名笔记，而是创建带录音短 ID 的独立固定笔记
+    @discardableResult
+    public func createSeparateObsidianNote(
+        for recordingId: UUID
+    ) throws -> (fileURL: URL, obsidianOpenURL: URL?) {
+        try saveNoteDirectlyToObsidian(
+            for: recordingId,
+            legacyResolution: .createSeparateNote
+        )
+    }
+
+    /// 解决受控区块的双方修改冲突（保留 Obsidian 手改版 / 采用 MemoFlow 新版 / 合并保留双方）
+    public func resolveObsidianConflict(
+        for recordingId: UUID,
+        blockKind: ObsidianManagedBlockKind,
+        choice: ObsidianConflictResolutionChoice
+    ) throws {
+        guard let binding = obsidianBindingsByRecording[recordingId] else { return }
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
         let accessed = root.startAccessingSecurityScopedResource()
         defer { if accessed { root.stopAccessingSecurityScopedResource() } }
-        let res = try MarkdownExporterService.writeDirectlyToObsidianVault(
-            recording: rec,
-            markdownContent: md,
-            vaultRootPath: root.path,
-            subfolder: preferences.obsidianTargetSubfolder,
-            title: MarkdownExporterService.exportTitle(recording: rec, revision: rev)
+
+        let nextBinding = try obsidianSyncService.resolveConflict(
+            vaultRootURL: root,
+            binding: binding,
+            blockKind: blockKind,
+            choice: choice,
+            backupsRootURL: obsidianBackupsDirectoryURL
         )
-        recordMarkdownExportResult(for: recordingId, result: .completed, destinationPath: res.fileURL.path)
-        lastBannerFeedback = "已写入 Obsidian：\(res.fileURL.lastPathComponent)"
-        return res
+        obsidianBindingsByRecording[recordingId] = nextBinding
+        lastBannerFeedback = "已处理「\(blockKind.displayTitle)」冲突（\(choice.displayTitle)）。"
+        saveToDisk()
+    }
+
+    /// 从最近一次写入前快照恢复 Obsidian 笔记
+    public func restoreObsidianNoteFromBackup(for recordingId: UUID) throws {
+        guard let binding = obsidianBindingsByRecording[recordingId] else {
+            throw ObsidianSyncError.backupNotFound
+        }
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let nextBinding = try obsidianSyncService.restoreFromBackup(
+            vaultRootURL: root,
+            binding: binding
+        )
+        obsidianBindingsByRecording[recordingId] = nextBinding
+        lastBannerFeedback = "已从写入前备份恢复 Obsidian 笔记：\(nextBinding.vaultRelativePath)"
+        saveToDisk()
     }
 
     // MARK: - Delete Recording (PRD R04, 4.7, A10, A18)
@@ -955,6 +1092,7 @@ public final class MemoFlowStore: ObservableObject {
         actionDraftsByRecording.removeValue(forKey: recordingId)
         confirmedActionsByRecording.removeValue(forKey: recordingId)
         markdownExportsByRecording.removeValue(forKey: recordingId)
+        obsidianBindingsByRecording.removeValue(forKey: recordingId)
         processingJobsByRecording.removeValue(forKey: recordingId)
         externalLinksByConfirmedAction = externalLinksByConfirmedAction.filter {
             !removedActionIds.contains($0.key)
@@ -1062,6 +1200,7 @@ public final class MemoFlowStore: ObservableObject {
         var externalLinksByConfirmedAction: [UUID: ExternalActionLink]
         var operationLogs: [ActionOperationLog]
         var markdownExportsByRecording: [UUID: [MarkdownExport]]
+        var obsidianBindingsByRecording: [UUID: ObsidianNoteBinding]
         var processingConsent: ProcessingConsent
         var processingJobsByRecording: [UUID: ProcessingJob]
         var preferences: MemoFlowPreferences
@@ -1076,6 +1215,7 @@ public final class MemoFlowStore: ObservableObject {
             externalLinksByConfirmedAction: [UUID: ExternalActionLink],
             operationLogs: [ActionOperationLog],
             markdownExportsByRecording: [UUID: [MarkdownExport]],
+            obsidianBindingsByRecording: [UUID: ObsidianNoteBinding] = [:],
             processingConsent: ProcessingConsent,
             processingJobsByRecording: [UUID: ProcessingJob],
             preferences: MemoFlowPreferences
@@ -1089,6 +1229,7 @@ public final class MemoFlowStore: ObservableObject {
             self.externalLinksByConfirmedAction = externalLinksByConfirmedAction
             self.operationLogs = operationLogs
             self.markdownExportsByRecording = markdownExportsByRecording
+            self.obsidianBindingsByRecording = obsidianBindingsByRecording
             self.processingConsent = processingConsent
             self.processingJobsByRecording = processingJobsByRecording
             self.preferences = preferences
@@ -1105,6 +1246,7 @@ public final class MemoFlowStore: ObservableObject {
             self.externalLinksByConfirmedAction = try c.decodeIfPresent([UUID: ExternalActionLink].self, forKey: .externalLinksByConfirmedAction) ?? [:]
             self.operationLogs = try c.decodeIfPresent([ActionOperationLog].self, forKey: .operationLogs) ?? []
             self.markdownExportsByRecording = try c.decodeIfPresent([UUID: [MarkdownExport]].self, forKey: .markdownExportsByRecording) ?? [:]
+            self.obsidianBindingsByRecording = try c.decodeIfPresent([UUID: ObsidianNoteBinding].self, forKey: .obsidianBindingsByRecording) ?? [:]
             self.processingConsent = try c.decodeIfPresent(ProcessingConsent.self, forKey: .processingConsent) ?? ProcessingConsent()
             self.processingJobsByRecording = try c.decodeIfPresent([UUID: ProcessingJob].self, forKey: .processingJobsByRecording) ?? [:]
             self.preferences = try c.decodeIfPresent(MemoFlowPreferences.self, forKey: .preferences) ?? MemoFlowPreferences()
@@ -1123,6 +1265,7 @@ public final class MemoFlowStore: ObservableObject {
             externalLinksByConfirmedAction: externalLinksByConfirmedAction,
             operationLogs: operationLogs,
             markdownExportsByRecording: markdownExportsByRecording,
+            obsidianBindingsByRecording: obsidianBindingsByRecording,
             processingConsent: processingConsent,
             processingJobsByRecording: processingJobsByRecording,
             preferences: preferences
@@ -1155,6 +1298,7 @@ public final class MemoFlowStore: ObservableObject {
             self.externalLinksByConfirmedAction = snap.externalLinksByConfirmedAction
             self.operationLogs = snap.operationLogs
             self.markdownExportsByRecording = snap.markdownExportsByRecording
+            self.obsidianBindingsByRecording = snap.obsidianBindingsByRecording
             self.processingConsent = snap.processingConsent
             self.processingJobsByRecording = snap.processingJobsByRecording
             self.preferences = snap.preferences
@@ -1178,6 +1322,7 @@ public final class MemoFlowStore: ObservableObject {
         externalLinksByConfirmedAction.removeAll()
         operationLogs.removeAll()
         markdownExportsByRecording.removeAll()
+        obsidianBindingsByRecording.removeAll()
 
         let tz = TimeZone(identifier: "Asia/Shanghai") ?? .current
         let now = Date()

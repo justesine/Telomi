@@ -37,7 +37,7 @@ let package = Package(
             name: "MemoFlowAcceptanceRunner",
             dependencies: ["MemoFlowCore"],
             path: "Tests/MemoFlowCoreTests",
-            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift"],
+            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift", "ObsidianPhasedTests.swift"],
             sources: ["PRDTestRunner.swift"]
         )
     ]

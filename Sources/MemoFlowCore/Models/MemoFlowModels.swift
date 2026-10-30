@@ -358,6 +358,8 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     public var suggestedMode: NoteMode?
     public var projectName: String?
     public var projectReference: String?
+    public var userSupplement: String
+    public var manualTags: [String]
     public var editedAt: Date
     public var currentRevisionId: UUID
 
@@ -368,6 +370,8 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
         suggestedMode: NoteMode? = nil,
         projectName: String? = nil,
         projectReference: String? = nil,
+        userSupplement: String = "",
+        manualTags: [String] = [],
         editedAt: Date = Date(),
         currentRevisionId: UUID
     ) {
@@ -377,8 +381,24 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
         self.suggestedMode = suggestedMode
         self.projectName = projectName
         self.projectReference = projectReference
+        self.userSupplement = userSupplement
+        self.manualTags = manualTags
         self.editedAt = editedAt
         self.currentRevisionId = currentRevisionId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.recordingId = try c.decode(UUID.self, forKey: .recordingId)
+        self.mode = try c.decode(NoteMode.self, forKey: .mode)
+        self.suggestedMode = try c.decodeIfPresent(NoteMode.self, forKey: .suggestedMode)
+        self.projectName = try c.decodeIfPresent(String.self, forKey: .projectName)
+        self.projectReference = try c.decodeIfPresent(String.self, forKey: .projectReference)
+        self.userSupplement = try c.decodeIfPresent(String.self, forKey: .userSupplement) ?? ""
+        self.manualTags = try c.decodeIfPresent([String].self, forKey: .manualTags) ?? []
+        self.editedAt = try c.decode(Date.self, forKey: .editedAt)
+        self.currentRevisionId = try c.decode(UUID.self, forKey: .currentRevisionId)
     }
 }
 
@@ -759,6 +779,7 @@ public struct MarkdownExport: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var shareResult: ShareExportResult
     public var destinationPath: String?
+    public var vaultRelativePath: String?
 
     public init(
         id: UUID = UUID(),
@@ -766,7 +787,8 @@ public struct MarkdownExport: Identifiable, Codable, Equatable, Sendable {
         confirmedActionIds: [UUID],
         createdAt: Date = Date(),
         shareResult: ShareExportResult,
-        destinationPath: String? = nil
+        destinationPath: String? = nil,
+        vaultRelativePath: String? = nil
     ) {
         self.id = id
         self.recordingId = recordingId
@@ -774,6 +796,149 @@ public struct MarkdownExport: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.shareResult = shareResult
         self.destinationPath = destinationPath
+        self.vaultRelativePath = vaultRelativePath
+    }
+}
+
+// MARK: - Obsidian Stable Binding, Managed Regions & Conflict Models (P0)
+
+/// MemoFlow 受控生成区块标识（区块外与「个人补充」区始终归属用户手写内容）
+public enum ObsidianManagedBlockKind: String, Codable, CaseIterable, Sendable {
+    case header = "header"
+    case summary = "summary"
+    case actions = "actions"
+    case marks = "marks"
+    case chapters = "chapters"
+    case transcript = "transcript"
+
+    public var displayTitle: String {
+        switch self {
+        case .header: return "标题与元信息"
+        case .summary: return "AI 笔记摘要与要点"
+        case .actions: return "待办与日程"
+        case .marks: return "高亮、批注与书签"
+        case .chapters: return "录音章节"
+        case .transcript: return "原话逐字稿"
+        }
+    }
+}
+
+/// 当用户在 Obsidian 修改了 AI 受控区块，同时 MemoFlow 重新整理生成了新内容时的双向版本冲突记录
+public struct ObsidianBlockConflict: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var blockKind: ObsidianManagedBlockKind
+    public var detectedAt: Date
+    public var userEditedContent: String
+    public var memoFlowGeneratedContent: String
+    public var baseExportedDigest: String
+
+    public init(
+        id: UUID = UUID(),
+        blockKind: ObsidianManagedBlockKind,
+        detectedAt: Date = Date(),
+        userEditedContent: String,
+        memoFlowGeneratedContent: String,
+        baseExportedDigest: String
+    ) {
+        self.id = id
+        self.blockKind = blockKind
+        self.detectedAt = detectedAt
+        self.userEditedContent = userEditedContent
+        self.memoFlowGeneratedContent = memoFlowGeneratedContent
+        self.baseExportedDigest = baseExportedDigest
+    }
+}
+
+/// 冲突解决选项
+public enum ObsidianConflictResolutionChoice: String, Codable, CaseIterable, Sendable {
+    case keepObsidianUserVersion = "keep_user"
+    case adoptMemoFlowVersion = "adopt_memoflow"
+    case keepBothMerged = "keep_both"
+
+    public var displayTitle: String {
+        switch self {
+        case .keepObsidianUserVersion: return "保留 Obsidian 手改版"
+        case .adoptMemoFlowVersion: return "采用 MemoFlow 新版"
+        case .keepBothMerged: return "合并保留双方版本"
+        }
+    }
+}
+
+/// 历史无 ID 同名笔记的处理策略
+public enum ObsidianLegacyResolution: Equatable, Sendable {
+    case requireUserConfirmation
+    case associateExisting(relativePath: String)
+    case createSeparateNote
+}
+
+/// 录音与固定 Obsidian 笔记的关联状态
+public enum ObsidianNoteBindingStatus: String, Codable, Equatable, Sendable {
+    case synced = "synced"
+    case needsLegacyConfirmation = "needs_legacy_confirmation"
+    case hasConflict = "has_conflict"
+    case missingInVault = "missing_in_vault"
+    case cloudNotDownloaded = "cloud_not_downloaded"
+    case authorizationExpired = "authorization_expired"
+
+    public var displayTitle: String {
+        switch self {
+        case .synced: return "笔记已关联同步"
+        case .needsLegacyConfirmation: return "发现同名历史笔记待确认"
+        case .hasConflict: return "存在手改冲突待选择"
+        case .missingInVault: return "库内笔记已移除"
+        case .cloudNotDownloaded: return "iCloud 笔记未下载"
+        case .authorizationExpired: return "目录授权失效"
+        }
+    }
+}
+
+/// 录音与单篇 Obsidian 笔记的稳定绑定记录（基于 recording_id + 相对路径）
+public struct ObsidianNoteBinding: Codable, Equatable, Sendable {
+    public var recordingId: UUID
+    public var vaultRelativePath: String
+    public var lastKnownFileName: String
+    public var lastExportedRevisionId: UUID?
+    public var lastExportedAt: Date?
+    public var lastSyncedFileSHA256: String?
+    public var lastSyncedModificationDate: Date?
+    public var managedBlockDigests: [String: String]
+    public var managedBlockSnapshots: [String: String]
+    public var status: ObsidianNoteBindingStatus
+    public var pendingLegacyCandidatePaths: [String]
+    public var conflicts: [ObsidianBlockConflict]
+    public var lastBackupFilePath: String?
+    public var lastErrorMessage: String?
+
+    public init(
+        recordingId: UUID,
+        vaultRelativePath: String,
+        lastKnownFileName: String,
+        lastExportedRevisionId: UUID? = nil,
+        lastExportedAt: Date? = nil,
+        lastSyncedFileSHA256: String? = nil,
+        lastSyncedModificationDate: Date? = nil,
+        managedBlockDigests: [String: String] = [:],
+        managedBlockSnapshots: [String: String] = [:],
+        status: ObsidianNoteBindingStatus = .synced,
+        pendingLegacyCandidatePaths: [String] = [],
+        conflicts: [ObsidianBlockConflict] = [],
+        lastBackupFilePath: String? = nil,
+        lastErrorMessage: String? = nil
+    ) {
+        self.recordingId = recordingId
+        self.vaultRelativePath = vaultRelativePath
+        self.lastKnownFileName = lastKnownFileName
+        self.lastExportedRevisionId = lastExportedRevisionId
+        self.lastExportedAt = lastExportedAt
+        self.lastSyncedFileSHA256 = lastSyncedFileSHA256
+        self.lastSyncedModificationDate = lastSyncedModificationDate
+        self.managedBlockDigests = managedBlockDigests
+        self.managedBlockSnapshots = managedBlockSnapshots
+        self.status = status
+        self.pendingLegacyCandidatePaths = pendingLegacyCandidatePaths
+        self.conflicts = conflicts
+        self.lastBackupFilePath = lastBackupFilePath
+        self.lastErrorMessage = lastErrorMessage
     }
 }
 

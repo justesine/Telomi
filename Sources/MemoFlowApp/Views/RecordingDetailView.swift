@@ -21,6 +21,7 @@ public struct RecordingDetailView: View {
     @State private var draftTitle: String = ""
     @State private var draftSummaryOrShortNote: String = ""
     @State private var draftProjectName: String = ""
+    @State private var draftUserSupplement: String = ""
     @State private var showingMarkdownSheet: Bool = false
     @State private var showingUnifiedReview: Bool = false
     @State private var editingSpeakerId: String? = nil
@@ -71,6 +72,7 @@ public struct RecordingDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         headerMetadataSection(rec: rec)
+                        obsidianBindingAndConflictCard(rec: rec)
                         audioPlayerCard(rec: rec)
                         processingStatusCard(rec: rec)
                         detailTabSwitcher
@@ -289,19 +291,24 @@ public struct RecordingDetailView: View {
                 }
 
                 if let vaultPath = store.preferences.obsidianVaultRootPath, !vaultPath.isEmpty {
+                    let isBound = (store.obsidianBindingsByRecording[rec.id]?.vaultRelativePath.isEmpty == false)
                     Button {
-                        if let res = try? store.saveNoteDirectlyToObsidian(for: rec.id),
-                           let obsURL = res.obsidianOpenURL {
-                            #if os(macOS)
-                            NSWorkspace.shared.open(obsURL)
-                            #elseif os(iOS)
-                            UIApplication.shared.open(obsURL)
-                            #endif
+                        do {
+                            let res = try store.saveNoteDirectlyToObsidian(for: rec.id)
+                            if let obsURL = res.obsidianOpenURL {
+                                #if os(macOS)
+                                NSWorkspace.shared.open(obsURL)
+                                #elseif os(iOS)
+                                UIApplication.shared.open(obsURL)
+                                #endif
+                            }
+                        } catch {
+                            store.lastBannerFeedback = error.localizedDescription
                         }
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "bolt.horizontal.fill")
-                            Text("一键直写并在 Obsidian 打开")
+                            Text(isBound ? "原位更新固定 Obsidian 笔记并打开" : "一键写入并在 Obsidian 打开")
                         }
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .padding(.horizontal, 12)
@@ -318,8 +325,126 @@ public struct RecordingDetailView: View {
 
                 Spacer()
             }
+
+            if let feedback = store.lastBannerFeedback, !feedback.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(MFTheme.iceCyan)
+                    Text(feedback)
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                    Spacer()
+                }
+            }
         }
         .mfGlassCard(cornerRadius: 16, padding: 14)
+    }
+
+    @ViewBuilder
+    private func obsidianBindingAndConflictCard(rec: Recording) -> some View {
+        if let binding = store.obsidianBindingsByRecording[rec.id] {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "books.vertical.fill")
+                        .foregroundStyle(MFTheme.softViolet)
+                    Text(binding.vaultRelativePath.isEmpty ? "Obsidian 笔记关联待处理" : "已关联笔记：\(binding.vaultRelativePath)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Spacer()
+                    MFBadgePill(
+                        binding.status.displayTitle,
+                        color: binding.status == .synced ? MFTheme.mintGreen : MFTheme.warmAmber
+                    )
+                }
+
+                if binding.status == .needsLegacyConfirmation, !binding.pendingLegacyCandidatePaths.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("发现缺少录音 ID 的同名历史笔记，系统已阻止直接覆盖。请审阅并选择处理方式：")
+                            .font(.caption)
+                            .foregroundStyle(MFTheme.warmAmber)
+
+                        ForEach(binding.pendingLegacyCandidatePaths, id: \.self) { candidatePath in
+                            HStack(spacing: 8) {
+                                Text(candidatePath)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                Spacer()
+                                Button("关联并保留手写更新") {
+                                    _ = try? store.associateLegacyObsidianNote(for: rec.id, relativePath: candidatePath)
+                                }
+                                .font(.caption2.weight(.semibold))
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+
+                        Button("不修改旧笔记，另建带录音 ID 的独立笔记") {
+                            _ = try? store.createSeparateObsidianNote(for: rec.id)
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                        .buttonStyle(.plain)
+                    }
+                    .padding(10)
+                    .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                if !binding.conflicts.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("检测到你在 Obsidian 修改了 AI 生成区域，已在笔记内同时保留双方版本。请选择最终保留方式：")
+                                .font(.caption)
+                                .foregroundStyle(MFTheme.warmAmber)
+                            Spacer()
+                            if binding.lastBackupFilePath != nil {
+                                Button("从写入前备份恢复") {
+                                    try? store.restoreObsidianNoteFromBackup(for: rec.id)
+                                }
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(MFTheme.coralRed)
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        ForEach(binding.conflicts) { conflict in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("冲突区域：\(conflict.blockKind.displayTitle)")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+
+                                HStack(spacing: 8) {
+                                    ForEach(ObsidianConflictResolutionChoice.allCases, id: \.self) { choice in
+                                        Button(choice.displayTitle) {
+                                            try? store.resolveObsidianConflict(
+                                                for: rec.id,
+                                                blockKind: conflict.blockKind,
+                                                choice: choice
+                                            )
+                                        }
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 5)
+                                        .background(MFTheme.iceBlue.opacity(0.16), in: Capsule())
+                                        .foregroundStyle(MFTheme.iceCyan)
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                            .padding(8)
+                            .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                } else if let err = binding.lastErrorMessage, binding.status != .synced {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(MFTheme.warmAmber)
+                }
+            }
+            .mfGlassCard(
+                cornerRadius: 14,
+                padding: 12,
+                tint: binding.status == .synced ? MFTheme.softViolet : MFTheme.warmAmber
+            )
+        }
     }
 
     private func updateProjectAssociation(for rec: Recording, projectName: String?) {
@@ -517,13 +642,15 @@ public struct RecordingDetailView: View {
                                 for: rec.id,
                                 newTitle: draftTitle.isEmpty ? rec.title : draftTitle,
                                 newContent: updatedContent,
-                                projectName: draftProjectName
+                                projectName: draftProjectName,
+                                userSupplement: draftUserSupplement
                             )
                             isEditingNote = false
                         } else {
                             draftTitle = rec.title
                             draftSummaryOrShortNote = rev.content.summaryOrShortNote
                             draftProjectName = note?.projectName ?? ""
+                            draftUserSupplement = note?.userSupplement ?? ""
                             isEditingNote = true
                         }
                     }
@@ -536,10 +663,20 @@ public struct RecordingDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("标题", text: $draftTitle)
                             .textFieldStyle(.roundedBorder)
-                        TextField("关联项目名（可留空）", text: $draftProjectName)
+                        TextField("关联项目名（支持自动转为 [[双链]]，可留空）", text: $draftProjectName)
                             .textFieldStyle(.roundedBorder)
+                        Text("AI 摘要 / 正文")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(MFTheme.textSecondary)
                         TextEditor(text: $draftSummaryOrShortNote)
-                            .frame(minHeight: 100)
+                            .frame(minHeight: 90)
+                            .padding(6)
+                            .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
+                        Text("个人补充（导出与重新整理时始终受保护保留）")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(MFTheme.textSecondary)
+                        TextEditor(text: $draftUserSupplement)
+                            .frame(minHeight: 70)
                             .padding(6)
                             .background(MFTheme.recessedBg, in: RoundedRectangle(cornerRadius: 8))
                     }
@@ -1191,11 +1328,20 @@ public struct MarkdownExportPreviewSheet: View {
                 MFTheme.ambientTopGlow.ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 14) {
-                    if store.hasCompletedMarkdownExport(for: recording.id) {
+                    if let binding = store.obsidianBindingsByRecording[recording.id], !binding.vaultRelativePath.isEmpty {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundStyle(MFTheme.mintGreen)
+                            Text("已稳定绑定固定笔记：\(binding.vaultRelativePath)。再次导出将原位更新同一篇笔记，并保留你在 Obsidian 中的手写段落、标签与双链。")
+                                .font(.caption)
+                                .foregroundStyle(MFTheme.textPrimary)
+                        }
+                        .mfGlassCard(cornerRadius: 12, padding: 10, tint: MFTheme.mintGreen)
+                    } else if store.hasCompletedMarkdownExport(for: recording.id) {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(MFTheme.warmAmber)
-                            Text("该笔记此前已导出过 Markdown。重新导出不会自动覆盖或删除你在 Obsidian 等外部工具中的旧副本，请注意去重。")
+                            Text("此前已通过剪贴板或系统分享导出过 Markdown。使用下方 Obsidian 直写可基于录音 ID 稳定绑定同一篇笔记。")
                                 .font(.caption)
                                 .foregroundStyle(MFTheme.textPrimary)
                         }
@@ -1262,8 +1408,10 @@ public struct MarkdownExportPreviewSheet: View {
             }
 
             if let vaultPath = store.preferences.obsidianVaultRootPath, !vaultPath.isEmpty {
+                let isBound = (store.obsidianBindingsByRecording[recording.id]?.vaultRelativePath.isEmpty == false)
                 Button {
-                    if let res = try? store.saveNoteDirectlyToObsidian(for: recording.id) {
+                    do {
+                        let res = try store.saveNoteDirectlyToObsidian(for: recording.id)
                         if let obsURL = res.obsidianOpenURL {
                             #if os(macOS)
                             NSWorkspace.shared.open(obsURL)
@@ -1272,11 +1420,14 @@ public struct MarkdownExportPreviewSheet: View {
                             #endif
                         }
                         dismiss()
+                    } catch {
+                        store.lastBannerFeedback = error.localizedDescription
+                        dismiss()
                     }
                 } label: {
                     HStack {
                         Image(systemName: "arrow.down.doc.fill")
-                        Text("直接写入 Obsidian 并在 Obsidian 中打开")
+                        Text(isBound ? "原位更新固定 Obsidian 笔记并打开" : "直接写入 Obsidian 并在 Obsidian 中打开")
                     }
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)

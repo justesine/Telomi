@@ -21,18 +21,29 @@ extension MarkdownExporterService {
     }
 }
 
-/// 负责生成结构清晰、层次分明的 Obsidian 兼容 Markdown（包含总结、待办与日程、录音章节、逐字稿，且严格遵守 PRD 第 07 节与 R25 规范）
+/// 负责生成结构清晰、层次分明的 Obsidian 兼容 Markdown（包含总结、待办与日程、书签批注、录音章节、逐字稿，且严格遵守 PRD 第 07 节与 R25 规范）
 public enum MarkdownExporterService {
 
-    /// 导出标题优先采用整理出的主题；旧笔记没有主题时，从摘要或大纲提取。
+    public static let systemManagedTags: Set<String> = ["录音笔记", "随手记", "会议", "会议记"]
+
+    /// 导出标题优先采用用户修改后的录音标题或整理出的主题；旧笔记没有主题时，从摘要或大纲提取。
     public static func exportTitle(recording: Recording, revision: NoteRevision) -> String {
-        let content = revision.content
-        let suggested = singleLine(content.suggestedTitle)
-        let isPlaceholder = suggested.range(
+        let trimmedRecordingTitle = singleLine(recording.title)
+        let isRecordingTitlePlaceholder = trimmedRecordingTitle.range(
             of: #"^(随手记|会议记)\s+\d{2}-\d{2}\s+\d{2}:\d{2}$"#,
             options: .regularExpression
         ) != nil
-        if !suggested.isEmpty && !isPlaceholder {
+        if !trimmedRecordingTitle.isEmpty && !isRecordingTitlePlaceholder {
+            return String(trimmedRecordingTitle.prefix(60))
+        }
+
+        let content = revision.content
+        let suggested = singleLine(content.suggestedTitle)
+        let isSuggestedPlaceholder = suggested.range(
+            of: #"^(随手记|会议记)\s+\d{2}-\d{2}\s+\d{2}:\d{2}$"#,
+            options: .regularExpression
+        ) != nil
+        if !suggested.isEmpty && !isSuggestedPlaceholder {
             return String(suggested.prefix(60))
         }
         let candidates = [content.summaryOrShortNote] + content.chapters.map(\.title) + content.keyPoints
@@ -42,21 +53,306 @@ public enum MarkdownExporterService {
                 .first ?? ""
             if !text.isEmpty { return String(text.prefix(30)) }
         }
-        let original = singleLine(recording.title)
-        return original.isEmpty ? "录音笔记" : String(original.prefix(60))
+        return trimmedRecordingTitle.isEmpty ? "录音笔记" : String(trimmedRecordingTitle.prefix(60))
     }
 
-    private static func singleLine(_ text: String) -> String {
+    public static func singleLine(_ text: String) -> String {
         text.components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private static func safeFileTitle(_ title: String) -> String {
+    public static func safeFileTitle(_ title: String) -> String {
         let cleaned = singleLine(title)
             .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|[]#^").union(.controlCharacters))
             .joined(separator: "-")
             .trimmingCharacters(in: CharacterSet(charactersIn: " ."))
         return cleaned.isEmpty ? "录音笔记" : String(cleaned.prefix(60))
+    }
+
+    public static func preferredFileName(recording: Recording, title: String) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+        dateFmt.timeZone = recording.recordedTimeZone
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        let datePrefix = dateFmt.string(from: recording.createdAt)
+        let safeTitle = safeFileTitle(title)
+        return "\(datePrefix)-\(safeTitle.isEmpty ? "录音笔记" : safeTitle).md"
+    }
+
+    /// 生成跨端（macOS + iOS）通用的 Obsidian 打开链接（优先使用 vault + file 相对路径，避免仅 Mac 有效的绝对路径）
+    public static func obsidianOpenURL(
+        vaultRootURL: URL,
+        relativePath: String
+    ) -> URL? {
+        let vaultName = vaultRootURL.lastPathComponent
+        let cleanRel = relativePath
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let fileParam: String
+        if cleanRel.lowercased().hasSuffix(".md") {
+            fileParam = String(cleanRel.dropLast(3))
+        } else {
+            fileParam = cleanRel
+        }
+        var comps = URLComponents(string: "obsidian://open")
+        if !vaultName.isEmpty && !fileParam.isEmpty {
+            comps?.queryItems = [
+                URLQueryItem(name: "vault", value: vaultName),
+                URLQueryItem(name: "file", value: fileParam)
+            ]
+        } else {
+            let fullURL = vaultRootURL.appendingPathComponent(cleanRel)
+            comps?.queryItems = [URLQueryItem(name: "path", value: fullURL.path)]
+        }
+        return comps?.url
+    }
+
+    public static func managedBlockStartMarker(_ kind: ObsidianManagedBlockKind) -> String {
+        "<!-- memoflow:block:\(kind.rawValue):start -->"
+    }
+
+    public static func managedBlockEndMarker(_ kind: ObsidianManagedBlockKind) -> String {
+        "<!-- memoflow:block:\(kind.rawValue):end -->"
+    }
+
+    public static let userSupplementStartMarker = "<!-- memoflow:user:supplement:start -->"
+    public static let userSupplementEndMarker = "<!-- memoflow:user:supplement:end -->"
+
+    public static func recordingAnchorComment(for recordingId: UUID) -> String {
+        "<!-- memoflow:recording_id=\(recordingId.uuidString) -->"
+    }
+
+    /// 规范化关联项目为 Obsidian 内部双链格式 `[[项目名]]`
+    public static func formatProjectWikiLink(_ rawProject: String?) -> String? {
+        guard let raw = rawProject?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        if raw.hasPrefix("[[") && raw.hasSuffix("]]") {
+            let inner = String(raw.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return inner.isEmpty ? nil : "[[\(inner)]]"
+        }
+        return "[[\(raw)]]"
+    }
+
+    /// 从 `[[项目名]]` 或普通文本还原纯项目名称
+    public static func unwrapProjectWikiLink(_ rawValue: String?) -> String? {
+        guard var raw = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        if (raw.hasPrefix("\"") && raw.hasSuffix("\"")) || (raw.hasPrefix("'") && raw.hasSuffix("'")) {
+            raw = String(raw.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if raw.hasPrefix("[[") && raw.hasSuffix("]]") {
+            raw = String(raw.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return raw.isEmpty ? nil : raw
+    }
+
+    /// 生成 YAML Frontmatter 行（支持合并保留用户在 Obsidian 中自定义的标签与额外属性）
+    public static func renderFrontmatterLines(
+        recording: Recording,
+        note: Note,
+        revision: NoteRevision,
+        preservedUserTags: [String] = [],
+        preservedCustomKeyBlocks: [[String]] = [],
+        fallbackProjectRawValue: String? = nil
+    ) -> [String] {
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.timeZone = recording.recordedTimeZone
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        let dateStr = dateFormatter.string(from: recording.createdAt)
+        let durationStr = TimeFormatting.formatDuration(recording.duration)
+        let modeTag = (revision.mode == .quickNote) ? "随手记" : "会议"
+        let title = exportTitle(recording: recording, revision: revision)
+
+        var mergedTags: [String] = ["录音笔记", modeTag]
+        for tag in note.manualTags + preservedUserTags {
+            let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            if !cleaned.isEmpty && !systemManagedTags.contains(cleaned) && !mergedTags.contains(cleaned) {
+                mergedTags.append(cleaned)
+            }
+        }
+
+        var lines: [String] = []
+        lines.append("---")
+        lines.append("title: \(escapeYAML(title))")
+        lines.append("recording_id: \(escapeYAML(recording.id.uuidString))")
+        lines.append("date: \(escapeYAML(dateStr))")
+        lines.append("timezone: \(escapeYAML(recording.recordedTimeZoneIdentifier))")
+        lines.append("source: MemoFlow")
+        lines.append("mode: \(modeTag)")
+        lines.append("duration: \(escapeYAML(durationStr))")
+        lines.append("processing_status: \(escapeYAML(recording.processingStatus.rawValue))")
+        lines.append("note_revision_id: \(escapeYAML(revision.id.uuidString))")
+        if let projLink = formatProjectWikiLink(note.projectName) {
+            lines.append("project: \(escapeYAML(projLink))")
+        } else if let fallback = fallbackProjectRawValue, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("project: \(fallback)")
+        }
+        let formattedTags = mergedTags.map { tag in
+            tag.contains(" ") || tag.contains(":") ? escapeYAML(tag) : tag
+        }.joined(separator: ", ")
+        lines.append("tags: [\(formattedTags)]")
+
+        for customBlock in preservedCustomKeyBlocks where !customBlock.isEmpty {
+            lines.append(contentsOf: customBlock)
+        }
+        lines.append("---")
+        return lines
+    }
+
+    /// 分区块生成 MemoFlow 受控区域文本（不含外层 start/end 注释标记）
+    public static func renderManagedBlocks(
+        recording: Recording,
+        note: Note,
+        revision: NoteRevision,
+        confirmedActions: [ConfirmedAction],
+        segments: [TranscriptSegment],
+        pendingDrafts: [ActionDraft] = []
+    ) -> [ObsidianManagedBlockKind: String] {
+        var blocks: [ObsidianManagedBlockKind: String] = [:]
+        let title = exportTitle(recording: recording, revision: revision)
+        let content = revision.content
+
+        // 1. Header 区块
+        var headerLines: [String] = ["# \(title)"]
+        if let projLink = formatProjectWikiLink(note.projectName) {
+            headerLines.append("")
+            headerLines.append("> 关联项目：\(projLink) · 时长：\(TimeFormatting.formatDuration(recording.duration)) · 时区：\(recording.recordedTimeZoneIdentifier)")
+        }
+        if recording.processingStatus == .transcriptNeedsReview {
+            headerLines.append("")
+            headerLines.append("> [!WARNING] 逐字稿待校对：当前机器逐字稿尚未人工听校，AI 摘要仍基于上一版逐字稿。")
+        }
+        blocks[.header] = headerLines.joined(separator: "\n")
+
+        // 2. Summary 区块
+        var summaryLines: [String] = []
+        if !content.knowledgeReferences.isEmpty {
+            summaryLines.append("## 提供给 AI 的知识库背景")
+            summaryLines.append("以下笔记片段用于辅助理解，不代表本次录音的新承诺。")
+            for reference in content.knowledgeReferences {
+                summaryLines.append("- \(reference.path)")
+            }
+            summaryLines.append("")
+        }
+
+        if revision.mode == .quickNote {
+            if !content.summaryOrShortNote.isEmpty {
+                summaryLines.append("## 核心总结")
+                summaryLines.append(content.summaryOrShortNote)
+            }
+        } else {
+            if !content.summaryOrShortNote.isEmpty {
+                summaryLines.append("## 一句话摘要")
+                summaryLines.append(content.summaryOrShortNote)
+                summaryLines.append("")
+            }
+            if !content.backgroundPoints.isEmpty {
+                summaryLines.append("## 必要背景")
+                for item in content.backgroundPoints {
+                    summaryLines.append("- \(item)")
+                }
+                summaryLines.append("")
+            }
+            if !content.keyPoints.isEmpty {
+                summaryLines.append("## 关键观点")
+                for item in content.keyPoints {
+                    summaryLines.append("- \(item)")
+                }
+                summaryLines.append("")
+            }
+            if !content.decisions.isEmpty {
+                summaryLines.append("## 已确认结论")
+                for item in content.decisions {
+                    summaryLines.append("- \(item)")
+                }
+                summaryLines.append("")
+            }
+        }
+        blocks[.summary] = summaryLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 3. Actions 区块
+        let visibleConfirmed = confirmedActions.filter { $0.executionStatus != .ignored }
+        let confirmedDraftIds = Set(visibleConfirmed.map(\.sourceDraftId))
+        let unconfirmedActiveDrafts = pendingDrafts.filter {
+            ($0.reviewStatus == .pending || $0.reviewStatus == .needsInfo) && !confirmedDraftIds.contains($0.id)
+        }
+        if !visibleConfirmed.isEmpty || !unconfirmedActiveDrafts.isEmpty {
+            var actionLines: [String] = ["## 行动记录"]
+            for action in visibleConfirmed {
+                actionLines.append(formatActionLine(action, recordingTimeZone: recording.recordedTimeZone))
+            }
+            for draft in unconfirmedActiveDrafts {
+                actionLines.append(formatPendingDraftLine(draft, recordingTimeZone: recording.recordedTimeZone))
+            }
+            blocks[.actions] = actionLines.joined(separator: "\n")
+        } else {
+            blocks[.actions] = ""
+        }
+
+        // 4. Marks 区块（手动高亮、批注与录制书签）
+        let marks = recording.marks ?? []
+        if !marks.isEmpty {
+            var markLines: [String] = ["## 书签与高亮批注"]
+            for mark in marks {
+                let kindLabel = (mark.kind == "highlight") ? "高亮" : "书签"
+                let timeLabel: String
+                if let endMs = mark.endMs, endMs > mark.startMs {
+                    timeLabel = "\(TimeFormatting.formatMilliseconds(mark.startMs)) - \(TimeFormatting.formatMilliseconds(endMs))"
+                } else {
+                    timeLabel = TimeFormatting.formatMilliseconds(mark.startMs)
+                }
+                let quotePart = mark.quote.isEmpty ? "" : " \(mark.quote)"
+                markLines.append("- [\(kindLabel) · \(timeLabel)]\(quotePart)")
+                if !mark.note.isEmpty {
+                    markLines.append("  - 批注：\(mark.note)")
+                }
+            }
+            blocks[.marks] = markLines.joined(separator: "\n")
+        } else {
+            blocks[.marks] = ""
+        }
+
+        // 5. Chapters 区块
+        let resolvedChapters: [NoteChapter] = {
+            if !content.chapters.isEmpty {
+                return content.chapters
+            }
+            return ASRAndLLMService.shared.buildChaptersFromSegments(segments)
+        }()
+        if !resolvedChapters.isEmpty {
+            var chapterLines: [String] = ["## 录音章节"]
+            for (index, chapter) in resolvedChapters.enumerated() {
+                let numStr = String(format: "%02d", index + 1)
+                chapterLines.append("### \(numStr). [\(chapter.formattedTimeRange)] \(chapter.title)")
+                chapterLines.append(chapter.summary)
+                if index < resolvedChapters.count - 1 {
+                    chapterLines.append("")
+                }
+            }
+            blocks[.chapters] = chapterLines.joined(separator: "\n")
+        } else {
+            blocks[.chapters] = ""
+        }
+
+        // 6. Transcript 区块
+        if !segments.isEmpty {
+            var transcriptLines: [String] = ["## 逐字稿"]
+            for seg in segments {
+                let speakerPrefix = (seg.speakerName?.isEmpty == false) ? "**\(seg.speakerName!)**: " : ""
+                let estPrefix = (seg.timingIsEstimated == true) ? "约 " : ""
+                transcriptLines.append("- [\(estPrefix)\(seg.formattedStartTime)] \(speakerPrefix)\(seg.text)")
+            }
+            blocks[.transcript] = transcriptLines.joined(separator: "\n")
+        } else {
+            blocks[.transcript] = ""
+        }
+
+        return blocks
     }
 
     public static func generateMarkdown(
@@ -67,129 +363,47 @@ public enum MarkdownExporterService {
         segments: [TranscriptSegment],
         pendingDrafts: [ActionDraft] = []
     ) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale(identifier: "zh_CN")
-        dateFormatter.timeZone = recording.recordedTimeZone
-        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let frontmatter = renderFrontmatterLines(recording: recording, note: note, revision: revision)
+        let blocks = renderManagedBlocks(
+            recording: recording,
+            note: note,
+            revision: revision,
+            confirmedActions: confirmedActions,
+            segments: segments,
+            pendingDrafts: pendingDrafts
+        )
 
-        let dateStr = dateFormatter.string(from: recording.createdAt)
-        let durationStr = TimeFormatting.formatDuration(recording.duration)
-        let modeTag = (revision.mode == .quickNote) ? "随手记" : "会议"
-
-        let title = exportTitle(recording: recording, revision: revision)
-        var lines: [String] = []
-        lines.append("---")
-        lines.append("title: \(escapeYAML(title))")
-        lines.append("date: \(dateStr)")
-        lines.append("source: MemoFlow")
-        lines.append("mode: \(modeTag)")
-        lines.append("duration: \"\(durationStr)\"")
-        if let project = note.projectName, !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            lines.append("project: \"[[\(project)]]\"")
-        }
-        lines.append("tags: [录音笔记, \(modeTag)]")
-        lines.append("---")
-        lines.append("")
-        lines.append("# \(title)")
+        var lines: [String] = frontmatter
+        lines.append(recordingAnchorComment(for: recording.id))
         lines.append("")
 
-        let content = revision.content
-
-        if !content.knowledgeReferences.isEmpty {
-            lines.append("## 提供给 AI 的知识库背景")
-            lines.append("以下笔记片段用于辅助理解，不代表本次录音的新承诺。")
-            for reference in content.knowledgeReferences {
-                lines.append("- \(reference.path)")
+        func appendManaged(_ kind: ObsidianManagedBlockKind) {
+            let inner = blocks[kind] ?? ""
+            lines.append(managedBlockStartMarker(kind))
+            if !inner.isEmpty {
+                lines.append(inner)
             }
+            lines.append(managedBlockEndMarker(kind))
             lines.append("")
         }
 
-        // 1. 总结区块（核心总结 / 随手记精简总结）
-        if revision.mode == .quickNote {
-            // 随手记（PRD 6.1 & A20）：展示核心总结，不凑空的「关键观点」「已确认结论」章节
-            if !content.summaryOrShortNote.isEmpty {
-                lines.append("## 核心总结")
-                lines.append(content.summaryOrShortNote)
-                lines.append("")
-            }
-        } else {
-            // 会议记（PRD 6.1 & 7.2）
-            if !content.summaryOrShortNote.isEmpty {
-                lines.append("## 一句话摘要")
-                lines.append(content.summaryOrShortNote)
-                lines.append("")
-            }
+        appendManaged(.header)
 
-            if !content.backgroundPoints.isEmpty {
-                lines.append("## 必要背景")
-                for item in content.backgroundPoints {
-                    lines.append("- \(item)")
-                }
-                lines.append("")
-            }
-
-            if !content.keyPoints.isEmpty {
-                lines.append("## 关键观点")
-                for item in content.keyPoints {
-                    lines.append("- \(item)")
-                }
-                lines.append("")
-            }
-
-            if !content.decisions.isEmpty {
-                lines.append("## 已确认结论")
-                for item in content.decisions {
-                    lines.append("- \(item)")
-                }
-                lines.append("")
-            }
+        // 用户手写补充专区（始终受保护，重新整理绝不覆盖）
+        lines.append("## 个人补充")
+        lines.append(userSupplementStartMarker)
+        let trimmedSupplement = note.userSupplement.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSupplement.isEmpty {
+            lines.append(trimmedSupplement)
         }
+        lines.append(userSupplementEndMarker)
+        lines.append("")
 
-        // 2. 待办与行动记录区块（包含已确认行动 + 尚未确认的待办/日程草稿，确保直接导入 Obsidian 也不漏待办）
-        let visibleConfirmed = confirmedActions.filter { $0.executionStatus != .ignored }
-        let confirmedDraftIds = Set(visibleConfirmed.map(\.sourceDraftId))
-        let unconfirmedActiveDrafts = pendingDrafts.filter {
-            ($0.reviewStatus == .pending || $0.reviewStatus == .needsInfo) && !confirmedDraftIds.contains($0.id)
-        }
-
-        if !visibleConfirmed.isEmpty || !unconfirmedActiveDrafts.isEmpty {
-            lines.append("## 行动记录")
-            for action in visibleConfirmed {
-                lines.append(formatActionLine(action, recordingTimeZone: recording.recordedTimeZone))
-            }
-            for draft in unconfirmedActiveDrafts {
-                lines.append(formatPendingDraftLine(draft, recordingTimeZone: recording.recordedTimeZone))
-            }
-            lines.append("")
-        }
-
-        // 3. 录音章节区块（按时间轴划分每个录音的章节小标题与要点，让长短录音在 Obsidian 中结构清晰）
-        let resolvedChapters: [NoteChapter] = {
-            if !content.chapters.isEmpty {
-                return content.chapters
-            }
-            return ASRAndLLMService.shared.buildChaptersFromSegments(segments)
-        }()
-
-        if !resolvedChapters.isEmpty {
-            lines.append("## 录音章节")
-            for (index, chapter) in resolvedChapters.enumerated() {
-                let numStr = String(format: "%02d", index + 1)
-                lines.append("### \(numStr). [\(chapter.formattedTimeRange)] \(chapter.title)")
-                lines.append(chapter.summary)
-                lines.append("")
-            }
-        }
-
-        // 4. 完整逐字稿区块（PRD 7.2 & V1.2 说话人识别）
-        if !segments.isEmpty {
-            lines.append("## 逐字稿")
-            for seg in segments {
-                let speakerPrefix = (seg.speakerName?.isEmpty == false) ? "**\(seg.speakerName!)**: " : ""
-                lines.append("- [\(seg.formattedStartTime)] \(speakerPrefix)\(seg.text)")
-            }
-            lines.append("")
-        }
+        appendManaged(.summary)
+        appendManaged(.actions)
+        appendManaged(.marks)
+        appendManaged(.chapters)
+        appendManaged(.transcript)
 
         return lines.joined(separator: "\n")
     }
@@ -284,7 +498,7 @@ public enum MarkdownExporterService {
         return tempURL
     }
 
-    /// 直接写入用户授权选定的 Obsidian 笔记库目录（PRD R15）
+    /// 底层协调写入接口（针对无 recording_id 的纯文本写入保持同名防覆盖保护；带 recording_id 的单篇持久同步请走 ObsidianNoteSyncService）
     public static func writeDirectlyToObsidianVault(
         recording: Recording,
         markdownContent: String,
@@ -319,13 +533,7 @@ public enum MarkdownExporterService {
 
         try FileManager.default.createDirectory(at: targetDirURL, withIntermediateDirectories: true)
 
-        let dateFmt = DateFormatter()
-        dateFmt.timeZone = recording.recordedTimeZone
-        dateFmt.dateFormat = "yyyy-MM-dd"
-        let datePrefix = dateFmt.string(from: recording.createdAt)
-
-        let safeTitle = safeFileTitle(title ?? recording.title)
-        let fileName = "\(datePrefix)-\(safeTitle.isEmpty ? "录音笔记" : safeTitle).md"
+        let fileName = preferredFileName(recording: recording, title: title ?? recording.title)
         let fileURL = uniqueFileURL(
             preferredURL: targetDirURL.appendingPathComponent(fileName),
             fileManager: .default
@@ -333,13 +541,10 @@ public enum MarkdownExporterService {
 
         try markdownContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
-        var comps = URLComponents(string: "obsidian://open")
-        comps?.queryItems = [URLQueryItem(name: "path", value: fileURL.path)]
-        return (fileURL, comps?.url)
+        let relPath = cleanSub.isEmpty ? fileURL.lastPathComponent : "\(cleanSub)/\(fileURL.lastPathComponent)"
+        return (fileURL, obsidianOpenURL(vaultRootURL: rootURL, relativePath: relPath))
     }
 
-    /// 避免重复导出覆盖用户已经在 Obsidian 中编辑过的笔记。
-    /// 首次导出使用稳定文件名；同名文件存在时追加序号。
     private static func uniqueFileURL(preferredURL: URL, fileManager: FileManager) -> URL {
         guard fileManager.fileExists(atPath: preferredURL.path) else { return preferredURL }
 
@@ -356,7 +561,7 @@ public enum MarkdownExporterService {
         }
     }
 
-    private static func escapeYAML(_ text: String) -> String {
+    public static func escapeYAML(_ text: String) -> String {
         let escaped = text.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
