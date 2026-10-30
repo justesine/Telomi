@@ -83,8 +83,7 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
             return [("ggml-large-v3-turbo-q5_0.bin", "Whisper Large v3 Turbo（本机模型，需回听校对）")]
         case .siliconFlow:
             return [
-                ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 中英混杂极快）"),
-                ("TeleAI/TeleSpeechASR", "TeleSpeechASR（中文会议与方言优化）")
+                ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 中英混杂极快 · 官方稳定在架）")
             ]
         case .groq:
             return [
@@ -227,6 +226,8 @@ public struct SettingsView: View {
     @State private var savedToastVisible: Bool = false
 
     // 动态模型同步与手动新增状态
+    @State private var showingASRModelSheet: Bool = false
+    @State private var showingLLMModelSheet: Bool = false
     @State private var isSyncingASRModels: Bool = false
     @State private var isSyncingLLMModels: Bool = false
     @State private var asrSyncStatusMessage: String?
@@ -410,72 +411,16 @@ public struct SettingsView: View {
             Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
                 .font(.caption)
 
-            // 预置模型 + 动态拉取/自定义模型选择（支持一键从 /v1/models 拉取最新模型，或手动添加新模型）
+            // 预置模型 + 动态拉取/自定义模型选择（点击弹出模型列表与搜索/添加）
             if selectedASRProvider != .custom {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("选择识别模型")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(MFTheme.textSecondary)
-
-                        Spacer()
-
-                        if selectedASRProvider.requiresAPIKey {
-                            Button {
-                                Task { await syncRemoteASRModels() }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: isSyncingASRModels ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
-                                    Text(isSyncingASRModels ? "正在拉取…" : "从服务端拉取最新模型")
-                                }
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(MFTheme.iceCyan)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isSyncingASRModels)
-
-                            Text("·").foregroundStyle(MFTheme.textMuted)
-
-                            Button {
-                                withAnimation { showingAddASRModelField.toggle() }
-                            } label: {
-                                Text(showingAddASRModelField ? "收起" : "+ 手动添加新模型")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(MFTheme.iceCyan)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    if let msg = asrSyncStatusMessage {
-                        Text(msg)
-                            .font(.caption2)
-                            .foregroundStyle(MFTheme.mintGreen)
-                    }
-
-                    if showingAddASRModelField {
-                        HStack(spacing: 8) {
-                            TextField("输入新发布的语音模型 ID（如 FunAudioLLM/SenseVoiceLarge）", text: $newASRModelIdInput)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption.monospaced())
-                            Button("添加并选中") {
-                                addCustomASRModel()
-                            }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-
-                    ForEach(combinedASRModels, id: \.id) { model in
-                        modelRadioRow(
-                            title: model.label,
-                            subtitle: model.id,
-                            isSelected: store.preferences.asrModelName == model.id || selectedASRProvider == .appleLocal
-                        ) {
-                            store.preferences.asrModelName = model.id
-                            autoSaveKeys()
-                        }
-                    }
+                modelSelectorCardRow(
+                    title: "选用语音识别模型",
+                    modelLabel: currentASRModelLabel,
+                    modelId: store.preferences.asrModelName,
+                    icon: "waveform",
+                    isOffline: selectedASRProvider == .appleLocal
+                ) {
+                    showingASRModelSheet = true
                 }
             } else {
                 VStack(alignment: .leading, spacing: 8) {
@@ -497,6 +442,33 @@ public struct SettingsView: View {
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
+        .sheet(isPresented: $showingASRModelSheet) {
+            ModelPickerModalView(
+                title: "选择语音转写模型 (ASR)",
+                subtitle: "点击切换，设置即刻生效",
+                iconName: "waveform",
+                currentSelectedId: store.preferences.asrModelName,
+                models: combinedASRModels,
+                presetIds: Set(selectedASRProvider.presetModels.map(\.id)),
+                isSyncing: isSyncingASRModels,
+                syncStatusMessage: asrSyncStatusMessage,
+                allowsSync: selectedASRProvider.requiresAPIKey,
+                onSelectModel: { id in
+                    store.preferences.asrModelName = id
+                    autoSaveKeys()
+                },
+                onSyncRemote: {
+                    Task { await syncRemoteASRModels() }
+                },
+                onAddCustomModel: { id in
+                    newASRModelIdInput = id
+                    addCustomASRModel()
+                },
+                onDismiss: {
+                    showingASRModelSheet = false
+                }
+            )
+        }
     }
 
     // MARK: - 2. LLM Selection Card
@@ -532,81 +504,16 @@ public struct SettingsView: View {
             Link("注册硅基流动账号 ↗", destination: URL(string: "https://cloud.siliconflow.cn/i/vZfzXQCz")!)
                 .font(.caption)
 
-            // 预置模型 + 动态拉取/自定义模型单选列表
-            if selectedLLMProvider.requiresAPIKey {
-                Text("LLM 只接收文字并整理笔记；语音转文字由上方 ASR 单独处理。更换服务商后需重新授权云处理。")
-                    .font(.caption).foregroundStyle(MFTheme.textSecondary)
-                TextField("模型 ID 或推理接入点 ID（以服务商控制台为准）", text: $store.preferences.llmModelName)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: store.preferences.llmModelName) { _, _ in store.saveToDisk() }
-                TextField("LLM 服务地址（与 API Key 地域一致）", text: $store.preferences.llmBaseURL)
-                    .textFieldStyle(.roundedBorder)
-            }
+            // 预置模型 + 动态拉取/自定义模型选择（点击弹出模型列表与搜索/添加）
             if selectedLLMProvider != .custom {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("选择整理模型")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(MFTheme.textSecondary)
-
-                        Spacer()
-
-                        if selectedLLMProvider.requiresAPIKey {
-                            Button {
-                                Task { await syncRemoteLLMModels(effectiveKey: effectiveLLMKey) }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: isSyncingLLMModels ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
-                                    Text(isSyncingLLMModels ? "正在拉取…" : "从服务端拉取最新模型")
-                                }
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(MFTheme.iceCyan)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isSyncingLLMModels)
-
-                            Text("·").foregroundStyle(MFTheme.textMuted)
-
-                            Button {
-                                withAnimation { showingAddLLMModelField.toggle() }
-                            } label: {
-                                Text(showingAddLLMModelField ? "收起" : "+ 手动添加新模型")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(MFTheme.iceCyan)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    if let msg = llmSyncStatusMessage {
-                        Text(msg)
-                            .font(.caption2)
-                            .foregroundStyle(MFTheme.mintGreen)
-                    }
-
-                    if showingAddLLMModelField {
-                        HStack(spacing: 8) {
-                            TextField("输入服务商公布的模型 ID", text: $newLLMModelIdInput)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption.monospaced())
-                            Button("添加并选中") {
-                                addCustomLLMModel()
-                            }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-
-                    ForEach(combinedLLMModels, id: \.id) { model in
-                        modelRadioRow(
-                            title: model.label,
-                            subtitle: model.id,
-                            isSelected: store.preferences.llmModelName == model.id || selectedLLMProvider == .localRules
-                        ) {
-                            store.preferences.llmModelName = model.id
-                            autoSaveKeys()
-                        }
-                    }
+                modelSelectorCardRow(
+                    title: "选用 AI 整理模型",
+                    modelLabel: currentLLMModelLabel,
+                    modelId: store.preferences.llmModelName,
+                    icon: "sparkles",
+                    isOffline: selectedLLMProvider == .localRules
+                ) {
+                    showingLLMModelSheet = true
                 }
             } else {
                 VStack(alignment: .leading, spacing: 8) {
@@ -635,6 +542,33 @@ public struct SettingsView: View {
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
+        .sheet(isPresented: $showingLLMModelSheet) {
+            ModelPickerModalView(
+                title: "选择 AI 整理模型 (LLM)",
+                subtitle: "点击切换，设置即刻生效",
+                iconName: "brain.head.profile",
+                currentSelectedId: store.preferences.llmModelName,
+                models: combinedLLMModels,
+                presetIds: Set(selectedLLMProvider.presetModels.map(\.id)),
+                isSyncing: isSyncingLLMModels,
+                syncStatusMessage: llmSyncStatusMessage,
+                allowsSync: selectedLLMProvider.requiresAPIKey,
+                onSelectModel: { id in
+                    store.preferences.llmModelName = id
+                    autoSaveKeys()
+                },
+                onSyncRemote: {
+                    Task { await syncRemoteLLMModels(effectiveKey: effectiveLLMKey) }
+                },
+                onAddCustomModel: { id in
+                    newLLMModelIdInput = id
+                    addCustomLLMModel()
+                },
+                onDismiss: {
+                    showingLLMModelSheet = false
+                }
+            )
+        }
     }
 
     // MARK: - 2.5 Live Streaming & Incremental Organizing Card (Requirement 1-8)
@@ -1503,6 +1437,85 @@ public struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
+    private func modelSelectorCardRow(
+        title: String,
+        modelLabel: String,
+        modelId: String,
+        icon: String,
+        isOffline: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [MFTheme.iceCyan, MFTheme.iceBlue],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 36, height: 36)
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(MFTheme.textSecondary)
+
+                        if isOffline {
+                            Text("端侧免密钥")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(MFTheme.mintGreen.opacity(0.18), in: Capsule())
+                                .foregroundStyle(MFTheme.mintGreen)
+                        }
+                    }
+
+                    Text(modelLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text(modelId)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(MFTheme.textMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text("选择模型")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(MFTheme.iceCyan.opacity(0.12), in: Capsule())
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     private func modelRadioRow(
         title: String,
         subtitle: String,
@@ -1745,6 +1758,20 @@ public struct SettingsView: View {
         return result
     }
 
+    private var currentASRModelLabel: String {
+        if let match = combinedASRModels.first(where: { $0.id == store.preferences.asrModelName }) {
+            return match.label
+        }
+        return store.preferences.asrModelName.isEmpty ? "未选择识别模型" : store.preferences.asrModelName
+    }
+
+    private var currentLLMModelLabel: String {
+        if let match = combinedLLMModels.first(where: { $0.id == store.preferences.llmModelName }) {
+            return match.label
+        }
+        return store.preferences.llmModelName.isEmpty ? "未选择整理模型" : store.preferences.llmModelName
+    }
+
     private func addCustomASRModel() {
         let trimmed = newASRModelIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -1821,5 +1848,273 @@ public struct SettingsView: View {
         } catch {
             llmSyncStatusMessage = "拉取失败：\(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Model Picker Modal Sheet (点击弹窗列表选择，带即时搜索、推荐分类与一键切换)
+
+private struct ModelPickerModalView: View {
+    let title: String
+    let subtitle: String
+    let iconName: String
+    let currentSelectedId: String
+    let models: [(id: String, label: String)]
+    let presetIds: Set<String>
+    let isSyncing: Bool
+    let syncStatusMessage: String?
+    let allowsSync: Bool
+    let onSelectModel: (String) -> Void
+    let onSyncRemote: () -> Void
+    let onAddCustomModel: (String) -> Void
+    let onDismiss: () -> Void
+
+    @State private var searchText: String = ""
+    @State private var showingAddCustomInput: Bool = false
+    @State private var customModelInput: String = ""
+
+    private var filteredModels: [(id: String, label: String)] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if q.isEmpty { return models }
+        return models.filter {
+            $0.id.lowercased().contains(q) || $0.label.lowercased().contains(q)
+        }
+    }
+
+    private var presetFiltered: [(id: String, label: String)] {
+        filteredModels.filter { presetIds.contains($0.id) }
+    }
+
+    private var customFiltered: [(id: String, label: String)] {
+        filteredModels.filter { !presetIds.contains($0.id) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                MFTheme.sheetBg.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    // 快速搜索栏（当模型数量大于 2 时显示）
+                    if models.count > 2 {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(MFTheme.textMuted)
+                            TextField("搜索模型（如 qwen、deepseek、sensevoice）", text: $searchText)
+                                .textFieldStyle(.plain)
+                                .font(.subheadline)
+                            if !searchText.isEmpty {
+                                Button {
+                                    searchText = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(MFTheme.textMuted)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
+                    }
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            if let msg = syncStatusMessage {
+                                Text(msg)
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.mintGreen)
+                                    .padding(.horizontal, 16)
+                            }
+
+                            // 1. 官方推荐与预置模型
+                            if !presetFiltered.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("官方推荐及预置模型")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(MFTheme.textSecondary)
+                                        Spacer()
+                                        Text("\(presetFiltered.count) 个可用")
+                                            .font(.caption2)
+                                            .foregroundStyle(MFTheme.textMuted)
+                                    }
+                                    .padding(.horizontal, 16)
+
+                                    ForEach(presetFiltered, id: \.id) { model in
+                                        pickerRow(
+                                            title: model.label,
+                                            modelId: model.id,
+                                            isSelected: currentSelectedId == model.id
+                                        ) {
+                                            onSelectModel(model.id)
+                                            onDismiss()
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2. 从服务端拉取或自定义添加的模型
+                            if !customFiltered.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("云端已同步 / 自定义模型")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(MFTheme.textSecondary)
+                                        Spacer()
+                                        Text("\(customFiltered.count) 个可用")
+                                            .font(.caption2)
+                                            .foregroundStyle(MFTheme.textMuted)
+                                    }
+                                    .padding(.horizontal, 16)
+
+                                    ForEach(customFiltered, id: \.id) { model in
+                                        pickerRow(
+                                            title: model.label,
+                                            modelId: model.id,
+                                            isSelected: currentSelectedId == model.id
+                                        ) {
+                                            onSelectModel(model.id)
+                                            onDismiss()
+                                        }
+                                    }
+                                }
+                            }
+
+                            if filteredModels.isEmpty {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.largeTitle)
+                                        .foregroundStyle(MFTheme.textMuted)
+                                    Text("未找到与「\(searchText)」匹配的模型")
+                                        .font(.caption)
+                                        .foregroundStyle(MFTheme.textSecondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 36)
+                            }
+
+                            // 3. 服务端动态拉取与手动输入新模型
+                            if allowsSync {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Divider().background(Color.white.opacity(0.1))
+
+                                    HStack {
+                                        Button {
+                                            onSyncRemote()
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                Image(systemName: isSyncing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
+                                                Text(isSyncing ? "正在拉取最新模型…" : "从服务端拉取最新模型")
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(MFTheme.iceCyan)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(isSyncing)
+
+                                        Spacer()
+
+                                        Button {
+                                            withAnimation { showingAddCustomInput.toggle() }
+                                        } label: {
+                                            Text(showingAddCustomInput ? "收起" : "+ 手动添加模型 ID")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(MFTheme.iceCyan)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.horizontal, 16)
+
+                                    if showingAddCustomInput {
+                                        HStack(spacing: 8) {
+                                            TextField("输入模型 ID（如 Qwen/Qwen2.5-7B-Instruct）", text: $customModelInput)
+                                                .textFieldStyle(.roundedBorder)
+                                                .font(.caption.monospaced())
+                                            Button("添加并选中") {
+                                                let trimmed = customModelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                guard !trimmed.isEmpty else { return }
+                                                onAddCustomModel(trimmed)
+                                                customModelInput = ""
+                                                showingAddCustomInput = false
+                                                onDismiss()
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                            .buttonStyle(.borderedProminent)
+                                        }
+                                        .padding(.horizontal, 16)
+                                    }
+                                }
+                                .padding(.top, 6)
+                            }
+                        }
+                        .padding(.vertical, 14)
+                    }
+                }
+            }
+            .navigationTitle(title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        onDismiss()
+                    }
+                    .font(.body.weight(.semibold))
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .frame(minWidth: 460, idealWidth: 500, minHeight: 460, idealHeight: 520)
+    }
+
+    private func pickerRow(
+        title: String,
+        modelId: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(isSelected ? MFTheme.iceCyan : MFTheme.textMuted)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text(modelId)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Text("当前使用")
+                        .font(.system(size: 10, weight: .bold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(MFTheme.iceCyan.opacity(0.18), in: Capsule())
+                        .foregroundStyle(MFTheme.iceCyan)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? MFTheme.iceCyan.opacity(0.08) : Color.white.opacity(0.03))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(isSelected ? MFTheme.iceCyan.opacity(0.4) : Color.clear, lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, 16)
+        }
+        .buttonStyle(.plain)
     }
 }

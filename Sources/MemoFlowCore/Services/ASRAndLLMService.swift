@@ -502,6 +502,24 @@ public final class ASRAndLLMService: Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             let errBody = String(data: data, encoding: .utf8) ?? ""
+            if (errBody.contains("30003") || errBody.lowercased().contains("model disabled"))
+                && modelName != "FunAudioLLM/SenseVoiceSmall"
+                && baseURL.contains("siliconflow") {
+                // 所选语音模型被服务商停用或下线（如已下线的 TeleSpeech 或误同步的 TTS），自动回退为官方稳定在架的 SenseVoiceSmall 重试
+                return try await transcribeWithOpenAICompatibleAPI(
+                    fileURL: fileURL,
+                    recording: recording,
+                    baseURL: baseURL,
+                    modelName: "FunAudioLLM/SenseVoiceSmall",
+                    apiKey: apiKey
+                )
+            }
+            if errBody.contains("30003") || errBody.lowercased().contains("model disabled") {
+                throw ProcessingPipelineError.invalidServerResponse(
+                    http.statusCode,
+                    "所选语音模型已被服务商下线或停用 (Model disabled)，请在设置中选用 SenseVoiceSmall 或 Apple 本地识别重试。"
+                )
+            }
             throw ProcessingPipelineError.invalidServerResponse(http.statusCode, errBody)
         }
 
@@ -1312,6 +1330,12 @@ public final class ASRAndLLMService: Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             let errBody = String(data: data, encoding: .utf8) ?? ""
+            if errBody.contains("30003") || errBody.lowercased().contains("model disabled") {
+                throw ProcessingPipelineError.invalidServerResponse(
+                    http.statusCode,
+                    "所选大模型已被服务商停用或下线 (Model disabled)，请在设置中切换为推荐的 Qwen2.5-7B 或 DeepSeek 重试。"
+                )
+            }
             throw ProcessingPipelineError.invalidServerResponse(http.statusCode, errBody)
         }
 
@@ -1710,12 +1734,15 @@ public final class ASRAndLLMService: Sendable {
 
         switch category {
         case .asr:
-            let asrKeywords = ["sensevoice", "telespeech", "whisper", "transcribe", "asr", "speech", "paraformer", "audio"]
+            let asrKeywords = ["sensevoice", "whisper", "transcribe", "paraformer"]
+            let excludeKeywords = ["cosyvoice", "tts", "voice-clone", "chat", "instruct", "audio-", "telespeech", "diarize"]
             let matched = allIds.filter { id in
                 let lower = id.lowercased()
-                return asrKeywords.contains(where: { lower.contains($0) }) && !lower.contains("tts")
+                let isASR = asrKeywords.contains(where: { lower.contains($0) })
+                let isExcluded = excludeKeywords.contains(where: { lower.contains($0) })
+                return isASR && !isExcluded
             }
-            return matched.isEmpty ? Array(allIds.prefix(25)) : matched.sorted()
+            return matched.isEmpty ? ["FunAudioLLM/SenseVoiceSmall"] : matched.sorted()
 
         case .llm:
             let excludeKeywords = ["whisper", "sensevoice", "telespeech", "embedding", "bge-", "rerank", "tts", "cosyvoice", "flux", "stable-diffusion", "dall-e", "moderation"]

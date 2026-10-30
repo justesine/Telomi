@@ -2465,6 +2465,17 @@ public final class MemoFlowStore: ObservableObject {
             if self.preferences.llmModelName.contains("Qwen3-235B") || self.preferences.llmModelName.contains("Qwen3-32B") {
                 self.preferences.llmModelName = "Qwen/Qwen2.5-72B-Instruct"
             }
+            if self.preferences.asrBaseURL.contains("siliconflow") &&
+               (self.preferences.asrModelName.contains("TeleSpeech") ||
+                self.preferences.asrModelName.contains("CosyVoice") ||
+                self.preferences.asrModelName.contains("XingChen") ||
+                self.preferences.asrModelName.contains("Qwen3-ASR")) {
+                self.preferences.asrModelName = "FunAudioLLM/SenseVoiceSmall"
+            }
+            self.preferences.customASRModels.removeAll { id in
+                let lower = id.lowercased()
+                return lower.contains("cosyvoice") || lower.contains("telespeech") || lower.contains("xingchen") || lower.contains("tts")
+            }
             return true
         } catch {
             print("MemoFlowStore loadFromDisk decode error: \(error)")
