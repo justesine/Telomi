@@ -497,33 +497,102 @@ public struct SettingsView: View {
                 .padding(.bottom, 2)
 
             ForEach(destinations) { dest in
-                let isSelected = selectedDestination == dest
-                Button {
-                    selectedDestination = dest
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: dest.iconName)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
-                            .frame(width: 18)
+                if dest == .appearance {
+                    macAppearanceSidebarRow
+                } else {
+                    let isSelected = selectedDestination == dest
+                    Button {
+                        selectedDestination = dest
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: dest.iconName)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
+                                .frame(width: 18)
 
-                        Text(dest.title)
-                            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                            .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
+                            Text(dest.title)
+                                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                                .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
 
-                        Spacer()
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.clear)
+                        )
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.clear)
-                    )
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    private var macAppearanceSidebarRow: some View {
+        Menu {
+            Button {
+                store.preferences.appearanceTheme = .system
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appearanceTheme == .system {
+                    Label("系统", systemImage: "checkmark")
+                } else {
+                    Text("系统")
+                }
+            }
+
+            Button {
+                store.preferences.appearanceTheme = .warmPaper
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appearanceTheme == .warmPaper {
+                    Label("浅色", systemImage: "checkmark")
+                } else {
+                    Text("浅色")
+                }
+            }
+
+            Button {
+                store.preferences.appearanceTheme = .darkNight
+                store.saveToDisk()
+                showSavedFeedback()
+            } label: {
+                if store.preferences.appearanceTheme == .darkNight {
+                    Label("深色", systemImage: "checkmark")
+                } else {
+                    Text("深色")
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "moon")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(MFTheme.iceCyan)
+                    .frame(width: 18)
+
+                Text("外观")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Spacer()
+
+                Text(appearanceShortLabel(store.preferences.appearanceTheme))
+                    .font(.system(size: 11))
+                    .foregroundStyle(MFTheme.textMuted)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(MFTheme.textMuted)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
     }
     #endif
 
@@ -584,19 +653,23 @@ public struct SettingsView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(destinations.enumerated()), id: \.element) { index, dest in
-                    #if os(iOS)
-                    NavigationLink(value: dest) {
-                        iosRowContent(dest: dest)
+                    if dest == .appearance {
+                        iosAppearanceRow
+                    } else {
+                        #if os(iOS)
+                        NavigationLink(value: dest) {
+                            iosRowContent(dest: dest)
+                        }
+                        .buttonStyle(.plain)
+                        #else
+                        Button {
+                            selectedDestination = dest
+                        } label: {
+                            iosRowContent(dest: dest)
+                        }
+                        .buttonStyle(.plain)
+                        #endif
                     }
-                    .buttonStyle(.plain)
-                    #else
-                    Button {
-                        selectedDestination = dest
-                    } label: {
-                        iosRowContent(dest: dest)
-                    }
-                    .buttonStyle(.plain)
-                    #endif
 
                     if index < destinations.count - 1 {
                         Divider()
@@ -622,6 +695,82 @@ public struct SettingsView: View {
                             )
                     )
             )
+        }
+    }
+
+    private var iosAppearanceRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "moon")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(MFTheme.iceCyan)
+                .frame(width: 24, height: 24)
+
+            Text("外观")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MFTheme.textPrimary)
+
+            Spacer()
+
+            Menu {
+                Button {
+                    store.preferences.appearanceTheme = .system
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appearanceTheme == .system {
+                        Label("系统", systemImage: "checkmark")
+                    } else {
+                        Text("系统")
+                    }
+                }
+
+                Button {
+                    store.preferences.appearanceTheme = .warmPaper
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appearanceTheme == .warmPaper {
+                        Label("浅色", systemImage: "checkmark")
+                    } else {
+                        Text("浅色")
+                    }
+                }
+
+                Button {
+                    store.preferences.appearanceTheme = .darkNight
+                    store.saveToDisk()
+                    showSavedFeedback()
+                } label: {
+                    if store.preferences.appearanceTheme == .darkNight {
+                        Label("深色", systemImage: "checkmark")
+                    } else {
+                        Text("深色")
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(appearanceShortLabel(store.preferences.appearanceTheme))
+                        .font(.system(size: 14))
+                        .foregroundStyle(MFTheme.textSecondary)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MFTheme.textMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
+    }
+
+    private func appearanceShortLabel(_ theme: AppearanceTheme) -> String {
+        switch theme {
+        case .system: return "系统"
+        case .warmPaper: return "浅色"
+        case .darkNight: return "深色"
         }
     }
 
@@ -804,27 +953,20 @@ public struct SettingsView: View {
 
     private var asrSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Explanation card
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("语音转写说明 (ASR)", systemImage: "info.circle.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(MFTheme.iceCyan)
-                    Spacer()
-                    statusPill(
-                        isReady: selectedASRProvider == .whisperLocal ? localWhisperReady :
-                            (!selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
-                        readyText: selectedASRProvider == .appleLocal ? "端侧免 Key 已就绪" :
-                            (selectedASRProvider == .whisperLocal ? "本机模型已就绪" : "已配置密钥"),
-                        emptyText: selectedASRProvider == .whisperLocal ? "需安装本机模型与工具" : "待粘贴 API Key"
-                    )
-                }
-                Text("语音转写负责将录制音频（或边录边整理时的分段切片）转换为文字逐字稿，作为后续 AI 笔记提取的依据。首选推荐使用免费极速的阿里 SenseVoiceSmall（硅基流动托管）。")
-                    .font(.caption)
+            // Status bar
+            HStack {
+                Text("服务状态")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(MFTheme.textSecondary)
+                Spacer()
+                statusPill(
+                    isReady: selectedASRProvider == .whisperLocal ? localWhisperReady :
+                        (!selectedASRProvider.requiresAPIKey || !asrAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                    readyText: selectedASRProvider == .appleLocal ? "端侧免 Key" :
+                        (selectedASRProvider == .whisperLocal ? "本机模型就绪" : "已配置密钥"),
+                    emptyText: selectedASRProvider == .whisperLocal ? "需安装本机模型" : "待配置 API Key"
+                )
             }
-            .padding(12)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
             // Provider selection
             Text("选择服务商")
@@ -945,25 +1087,18 @@ public struct SettingsView: View {
         let effectiveLLMKey = isSharingKey ? asrAPIKeyInput : llmAPIKeyInput
 
         return VStack(alignment: .leading, spacing: 14) {
-            // Explanation card
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("AI 笔记整理说明 (LLM)", systemImage: "sparkles")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(MFTheme.warmAmber)
-                    Spacer()
-                    statusPill(
-                        isReady: !selectedLLMProvider.requiresAPIKey || !effectiveLLMKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                        readyText: selectedLLMProvider == .localRules ? "本地规则已就绪" : "已配置密钥",
-                        emptyText: "待粘贴 API Key"
-                    )
-                }
-                Text("AI 整理只接收转写出的文字逐字稿，负责提炼核心要点、会议纪要与有证据的待办日程。推荐使用免费极速的 Qwen2.5-7B（极速出稿）或进阶推理的 DeepSeek 系列。")
-                    .font(.caption)
+            // Status bar
+            HStack {
+                Text("服务状态")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(MFTheme.textSecondary)
+                Spacer()
+                statusPill(
+                    isReady: !selectedLLMProvider.requiresAPIKey || !effectiveLLMKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    readyText: selectedLLMProvider == .localRules ? "本地规则就绪" : "已配置密钥",
+                    emptyText: "待配置 API Key"
+                )
             }
-            .padding(12)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
             // Provider selection
             Text("选择服务商")
@@ -1112,44 +1247,21 @@ public struct SettingsView: View {
 
     private var liveStreamingSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Toggle(isOn: Binding(
+            Toggle("开启边录边整理模式", isOn: Binding(
                 get: { store.preferences.liveStreamingTranscriptionEnabled },
                 set: {
                     store.preferences.liveStreamingTranscriptionEnabled = $0
                     store.saveToDisk()
                     showSavedFeedback()
                 }
-            )) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("开启边录边整理模式")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(MFTheme.textPrimary)
-                    Text("录音过程中持续分段转写，增量生成可查看的笔记草稿；停止后复用已完成结果，只处理剩余片段并做最终合并。")
-                        .font(.caption2)
-                        .foregroundStyle(MFTheme.textSecondary)
-                }
-            }
+            ))
+            .font(.subheadline.weight(.semibold))
             .toggleStyle(SwitchToggleStyle(tint: MFTheme.iceCyan))
 
-            Divider().opacity(0.1)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("分段处理与频次说明", systemImage: "clock.arrow.circlepath")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(MFTheme.iceCyan)
-                Text("• 录音期间每 30 秒自动分段并在后台队列安全转写；\n• 增量草稿仅发送新增切片文字，严格避免重复向云端发送全量文本，控制费用与耗电；\n• 原音频无损保存于设备本地，转写失败绝不影响录音持续进行。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("网络异常与断点恢复说明", systemImage: "wifi.exclamationmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(MFTheme.warmAmber)
-                Text("• 网络中断或信号微弱时，待处理切片将安全保留在本地日志队列中；网络恢复后自动断点续传；\n• 即使 App 异常退出或来电打断，下次启动亦可完整恢复处理进度。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
+            Text("录音过程中持续增量分段转写并生成可查看的笔记草稿；停止后复用已完成结果，只处理剩余片段。原音频始终完整安全保存在本地。")
+                .font(.caption)
+                .foregroundStyle(MFTheme.textSecondary)
+                .lineSpacing(3)
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }
@@ -1158,17 +1270,8 @@ public struct SettingsView: View {
 
     private var speakerSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("说话人分离与电影角色昵称主题")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MFTheme.softViolet)
-                Text("录音转写后，自动区分发言人，并依据所选主题赋予经典角色昵称（如《教父》《阿甘正传》《星际穿越》等），让纪要读起来更生动自然。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
             VStack(alignment: .leading, spacing: 8) {
-                Text("选择昵称主题")
+                Text("角色昵称主题")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(MFTheme.textSecondary)
 
@@ -1188,7 +1291,7 @@ public struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("个人声纹档案（AI-001：我的专属声音）")
+                Text("个人声纹档案")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(MFTheme.textSecondary)
 
@@ -1198,7 +1301,7 @@ public struct SettingsView: View {
                             Text(profile.featureDescription)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(MFTheme.textPrimary)
-                            Text("录入时长: \(Int(profile.sampleDuration)) 秒 · 录音整理时自动标记为本人发言")
+                            Text("已录入（\(Int(profile.sampleDuration)) 秒）· 录音整理时自动标记为本人发言")
                                 .font(.caption2)
                                 .foregroundStyle(MFTheme.textSecondary)
                         }
@@ -1228,14 +1331,9 @@ public struct SettingsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Label("说话人名称手动管理", systemImage: "pencil.and.outline")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(MFTheme.softViolet)
-                Text("在任意单篇笔记的「转写逐字稿」详情中，点击说话人头像或标签，可直接修改发言人姓名；修改将自动级联同步更新该录音内的所有历史发言片段。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
+            Text("提示：在单篇笔记的逐字稿中点击发言人，可随时手动修改姓名并级联同步。")
+                .font(.caption2)
+                .foregroundStyle(MFTheme.textMuted)
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
     }
@@ -1244,27 +1342,10 @@ public struct SettingsView: View {
 
     private var obsidianSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("Obsidian 笔记库联动", systemImage: "book.pages")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(MFTheme.warmAmber)
-                    Spacer()
-                    if let path = store.preferences.obsidianVaultRootPath, !path.isEmpty {
-                        MFBadgePill("已连接", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
-                    } else {
-                        MFBadgePill("未配置", color: MFTheme.textMuted, icon: "circle")
-                    }
-                }
-                Text("将 MemoFlow 整理的结构化笔记导出到指定的 Obsidian 笔记库，生成带双向链接、原话溯源与音频相对引用的原生 Markdown。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("当前绑定的笔记库根目录：")
-                        .font(.caption2)
+                    Text("当前绑定的笔记库根目录")
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(MFTheme.textSecondary)
                     Text(store.preferences.obsidianVaultRootPath ?? "尚未选择 Obsidian 库目录")
                         .font(.caption.monospaced())
@@ -1272,7 +1353,7 @@ public struct SettingsView: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Button("选择文件夹…") {
+                Button(store.preferences.obsidianVaultRootPath == nil ? "选择文件夹…" : "更换文件夹…") {
                     choosingVault = true
                 }
                 .font(.caption.weight(.semibold))
@@ -1482,15 +1563,6 @@ public struct SettingsView: View {
 
     private var calendarSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("日历与提醒事项联动 (CAL-003)", systemImage: "calendar.badge.clock")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MFTheme.mintGreen)
-                Text("将录音与纪要中识别出的待办、日程与承诺事项，同步至 Apple 系统自带的「日历」与「提醒事项」。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("日程创建模式")
                     .font(.caption.weight(.bold))
@@ -1580,47 +1652,25 @@ public struct SettingsView: View {
 
     private var appearanceSubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("视觉主题与阅读质感（VIS-001）", systemImage: "paintbrush.pointed.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MFTheme.iceBlue)
-                Text("启发自 Readwise 极简暖纸阅读体验。为长篇逐字稿阅读提供温暖、克制、安静的书籍质感。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
-            Picker("视觉主题", selection: Binding(
-                get: { store.preferences.appearanceTheme },
-                set: {
-                    store.preferences.appearanceTheme = $0
-                    store.saveToDisk()
-                    showSavedFeedback()
+            HStack {
+                Text("外观主题")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MFTheme.textPrimary)
+                Spacer()
+                Picker("外观", selection: Binding(
+                    get: { store.preferences.appearanceTheme },
+                    set: {
+                        store.preferences.appearanceTheme = $0
+                        store.saveToDisk()
+                        showSavedFeedback()
+                    }
+                )) {
+                    Text("系统").tag(AppearanceTheme.system)
+                    Text("浅色").tag(AppearanceTheme.warmPaper)
+                    Text("深色").tag(AppearanceTheme.darkNight)
                 }
-            )) {
-                ForEach(AppearanceTheme.allCases, id: \.self) { theme in
-                    Text(theme.displayTitle).tag(theme)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            // Live theme preview card
-            VStack(alignment: .leading, spacing: 8) {
-                Text("当前排版质感预览")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MFTheme.textSecondary)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("会议纪要 · 品牌战略研讨会")
-                        .font(.system(size: 14, weight: .bold, design: .serif))
-                        .foregroundStyle(MFTheme.textPrimary)
-                    Text("“通过 AI 与功效靶点筛选，建立专属人群数据库，实现从研发到产品端的高效闭环。”")
-                        .font(.system(size: 12, design: .serif))
-                        .foregroundStyle(MFTheme.textSecondary)
-                        .lineSpacing(3)
-                }
-                .padding(12)
-                .background(MFTheme.cardBgTop, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 220)
             }
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
@@ -1630,20 +1680,11 @@ public struct SettingsView: View {
 
     private var privacySubpageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("隐私透明与系统权限", systemImage: "hand.raised.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MFTheme.coralRed)
-                Text("原音频仅存放于设备内部；转写或 AI 整理前若涉及云端，均须获得明确授权；您可随时一键撤回授权或重置数据。")
-                    .font(.caption2)
-                    .foregroundStyle(MFTheme.textSecondary)
-            }
-
             // Cloud Processing Consent
             let isConsented = store.processingConsent.grantedAt != nil && store.processingConsent.revokedAt == nil
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("云端大模型与 ASR 处理授权")
+                    Text("云端处理授权")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(MFTheme.textPrimary)
                     Text(isConsented ? "已授权：录音可使用云端 API" : "未授权：仅允许在端侧离线运行")
