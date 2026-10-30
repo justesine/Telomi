@@ -248,51 +248,41 @@ public struct HomeView: View {
                 Button {
                     _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: true)
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(MFTheme.mintGreen)
-                        Text("双向同步")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(MFTheme.textPrimary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(MFTheme.cardSurfaceGradient)
-                            .overlay(
-                                Capsule()
-                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
-                            )
-                    )
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(MFTheme.mintGreen)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(MFTheme.cardSurfaceGradient)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                )
+                        )
                 }
                 .buttonStyle(.plain)
+                .help("双向同步 Obsidian 笔记库")
             }
 
             Button {
                 showingGroundedQA = true
             } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "books.vertical.circle.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(MFTheme.softViolet)
-                    Text("跨笔记问答")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MFTheme.textPrimary)
-                }
-                .padding(.horizontal, 11)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(MFTheme.cardSurfaceGradient)
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
-                        )
-                )
+                Image(systemName: "books.vertical")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(MFTheme.softViolet)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Circle()
+                            .fill(MFTheme.cardSurfaceGradient)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                            )
+                    )
             }
             .buttonStyle(.plain)
+            .help("跨笔记问答")
 
             Button {
                 showingSettings = true
