@@ -426,6 +426,8 @@ public struct HomeView: View {
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(selectedDate != nil && Calendar.current.isDateInToday(selectedDate!) ? MFTheme.iceCyan : MFTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(MFTheme.recessedBg, in: Capsule())
@@ -442,7 +444,7 @@ public struct HomeView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button(selectedDate == nil ? (isEnglish ? "All Memories" : "全部记忆") : (isEnglish ? "View All" : "查看全部")) {
+                    Button(selectedDate == nil ? (isEnglish ? "All" : "全部记忆") : (isEnglish ? "View All" : "查看全部")) {
                         withAnimation {
                             if selectedDate == nil {
                                 selectedDate = Date()
@@ -454,6 +456,8 @@ public struct HomeView: View {
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(selectedDate == nil ? Color.white : MFTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(selectedDate == nil ? MFTheme.iceBlue : MFTheme.recessedBg, in: Capsule())
@@ -845,9 +849,11 @@ public struct HomeView: View {
                     }
                 } label: {
                     Text(mode.localizedTitle(isEnglish: isEnglish))
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
                         .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
-                        .padding(.horizontal, 12)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(
                             Capsule()
