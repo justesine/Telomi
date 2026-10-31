@@ -517,169 +517,33 @@ public struct SettingsView: View {
                 .padding(.bottom, 2)
 
             ForEach(destinations) { dest in
-                if dest == .appearance {
-                    macAppearanceSidebarRow
-                } else if dest == .language {
-                    macLanguageSidebarRow
-                } else {
-                    let isSelected = selectedDestination == dest
-                    Button {
-                        selectedDestination = dest
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: dest.iconName)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
-                                .frame(width: 18)
+                let isSelected = selectedDestination == dest
+                Button {
+                    selectedDestination = dest
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: dest.iconName)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isSelected ? MFTheme.iceCyan : dest.iconColor)
+                            .frame(width: 18)
 
-                            Text(dest.localizedTitle(isEnglish: isEnglish))
-                                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                                .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
+                        Text(dest.localizedTitle(isEnglish: isEnglish))
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                            .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textSecondary)
 
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.clear)
-                        )
-                        .contentShape(Rectangle())
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isSelected ? MFTheme.iceCyan.opacity(0.12) : Color.clear)
+                    )
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
-    }
-
-    private var macAppearanceSidebarRow: some View {
-        Menu {
-            Button {
-                store.preferences.appearanceTheme = .system
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appearanceTheme == .system {
-                    Label(L10n.systemTheme(isEnglish), systemImage: "checkmark")
-                } else {
-                    Text(L10n.systemTheme(isEnglish))
-                }
-            }
-
-            Button {
-                store.preferences.appearanceTheme = .warmPaper
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appearanceTheme == .warmPaper {
-                    Label(L10n.lightTheme(isEnglish), systemImage: "checkmark")
-                } else {
-                    Text(L10n.lightTheme(isEnglish))
-                }
-            }
-
-            Button {
-                store.preferences.appearanceTheme = .darkNight
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appearanceTheme == .darkNight {
-                    Label(L10n.darkTheme(isEnglish), systemImage: "checkmark")
-                } else {
-                    Text(L10n.darkTheme(isEnglish))
-                }
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "moon")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(MFTheme.iceCyan)
-                    .frame(width: 18)
-
-                Text(L10n.appearance(isEnglish))
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(MFTheme.textSecondary)
-
-                Spacer()
-
-                Text(appearanceShortLabel(store.preferences.appearanceTheme))
-                    .font(.system(size: 11))
-                    .foregroundStyle(MFTheme.textMuted)
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(MFTheme.textMuted)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-    }
-
-    private var macLanguageSidebarRow: some View {
-        Menu {
-            Button {
-                store.preferences.appLanguage = .system
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appLanguage == .system {
-                    Label(L10n.languageOptionTitle(.system, isEnglish: isEnglish), systemImage: "checkmark")
-                } else {
-                    Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish))
-                }
-            }
-
-            Button {
-                store.preferences.appLanguage = .chinese
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appLanguage == .chinese {
-                    Label("简体中文", systemImage: "checkmark")
-                } else {
-                    Text("简体中文")
-                }
-            }
-
-            Button {
-                store.preferences.appLanguage = .english
-                store.saveToDisk()
-                showSavedFeedback()
-            } label: {
-                if store.preferences.appLanguage == .english {
-                    Label("English", systemImage: "checkmark")
-                } else {
-                    Text("English")
-                }
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "globe")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(MFTheme.mintGreen)
-                    .frame(width: 18)
-
-                Text(L10n.language(isEnglish))
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(MFTheme.textSecondary)
-
-                Spacer()
-
-                Text(L10n.languageShortLabel(store.preferences.appLanguage, isEnglish: isEnglish))
-                    .font(.system(size: 11))
-                    .foregroundStyle(MFTheme.textMuted)
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(MFTheme.textMuted)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
     }
     #endif
 
@@ -740,25 +604,19 @@ public struct SettingsView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(destinations.enumerated()), id: \.element) { index, dest in
-                    if dest == .appearance {
-                        iosAppearanceRow
-                    } else if dest == .language {
-                        iosLanguageRow
-                    } else {
-                        #if os(iOS)
-                        NavigationLink(value: dest) {
-                            iosRowContent(dest: dest)
-                        }
-                        .buttonStyle(.plain)
-                        #else
-                        Button {
-                            selectedDestination = dest
-                        } label: {
-                            iosRowContent(dest: dest)
-                        }
-                        .buttonStyle(.plain)
-                        #endif
+                    #if os(iOS)
+                    NavigationLink(value: dest) {
+                        iosRowContent(dest: dest)
                     }
+                    .buttonStyle(.plain)
+                    #else
+                    Button {
+                        selectedDestination = dest
+                    } label: {
+                        iosRowContent(dest: dest)
+                    }
+                    .buttonStyle(.plain)
+                    #endif
 
                     if index < destinations.count - 1 {
                         Divider()
@@ -785,142 +643,6 @@ public struct SettingsView: View {
                     )
             )
         }
-    }
-
-    private var iosAppearanceRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "moon")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(MFTheme.iceCyan)
-                .frame(width: 24, height: 24)
-
-            Text(L10n.appearance(isEnglish))
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(MFTheme.textPrimary)
-
-            Spacer()
-
-            Menu {
-                Button {
-                    store.preferences.appearanceTheme = .system
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appearanceTheme == .system {
-                        Label(L10n.systemTheme(isEnglish), systemImage: "checkmark")
-                    } else {
-                        Text(L10n.systemTheme(isEnglish))
-                    }
-                }
-
-                Button {
-                    store.preferences.appearanceTheme = .warmPaper
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appearanceTheme == .warmPaper {
-                        Label(L10n.lightTheme(isEnglish), systemImage: "checkmark")
-                    } else {
-                        Text(L10n.lightTheme(isEnglish))
-                    }
-                }
-
-                Button {
-                    store.preferences.appearanceTheme = .darkNight
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appearanceTheme == .darkNight {
-                        Label(L10n.darkTheme(isEnglish), systemImage: "checkmark")
-                    } else {
-                        Text(L10n.darkTheme(isEnglish))
-                    }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(appearanceShortLabel(store.preferences.appearanceTheme))
-                        .font(.system(size: 14))
-                        .foregroundStyle(MFTheme.textSecondary)
-
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MFTheme.textMuted)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-        .contentShape(Rectangle())
-    }
-
-    private var iosLanguageRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "globe")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(MFTheme.mintGreen)
-                .frame(width: 24, height: 24)
-
-            Text(L10n.language(isEnglish))
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(MFTheme.textPrimary)
-
-            Spacer()
-
-            Menu {
-                Button {
-                    store.preferences.appLanguage = .system
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appLanguage == .system {
-                        Label(L10n.languageOptionTitle(.system, isEnglish: isEnglish), systemImage: "checkmark")
-                    } else {
-                        Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish))
-                    }
-                }
-
-                Button {
-                    store.preferences.appLanguage = .chinese
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appLanguage == .chinese {
-                        Label("简体中文", systemImage: "checkmark")
-                    } else {
-                        Text("简体中文")
-                    }
-                }
-
-                Button {
-                    store.preferences.appLanguage = .english
-                    store.saveToDisk()
-                    showSavedFeedback()
-                } label: {
-                    if store.preferences.appLanguage == .english {
-                        Label("English", systemImage: "checkmark")
-                    } else {
-                        Text("English")
-                    }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(L10n.languageOptionTitle(store.preferences.appLanguage, isEnglish: isEnglish))
-                        .font(.system(size: 14))
-                        .foregroundStyle(MFTheme.textSecondary)
-
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MFTheme.textMuted)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-        .contentShape(Rectangle())
     }
 
     private func appearanceShortLabel(_ theme: AppearanceTheme) -> String {
@@ -1091,10 +813,10 @@ public struct SettingsView: View {
                 .foregroundStyle(dest.iconColor)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(dest.title)
+                Text(dest.localizedTitle(isEnglish: isEnglish))
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(MFTheme.textPrimary)
-                Text("\(dest.groupName) · 设置项")
+                Text("\(dest.localizedGroupName(isEnglish: isEnglish)) · \(isEnglish ? "Settings" : "设置项")")
                     .font(.caption2)
                     .foregroundStyle(MFTheme.textSecondary)
             }
@@ -1102,7 +824,7 @@ public struct SettingsView: View {
             Spacer()
 
             if savedToastVisible {
-                MFBadgePill("已保存", color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
+                MFBadgePill(L10n.saved(isEnglish), color: MFTheme.mintGreen, icon: "checkmark.circle.fill")
                     .transition(.opacity)
             }
 
@@ -1892,57 +1614,143 @@ public struct SettingsView: View {
     // MARK: - 8. Appearance Subpage Content
 
     private var appearanceSubpageContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(L10n.appearance(isEnglish))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(MFTheme.textPrimary)
-                Spacer()
-                Picker(L10n.appearance(isEnglish), selection: Binding(
-                    get: { store.preferences.appearanceTheme },
-                    set: {
-                        store.preferences.appearanceTheme = $0
-                        store.saveToDisk()
-                        showSavedFeedback()
-                    }
-                )) {
-                    Text(L10n.systemTheme(isEnglish)).tag(AppearanceTheme.system)
-                    Text(L10n.lightTheme(isEnglish)).tag(AppearanceTheme.warmPaper)
-                    Text(L10n.darkTheme(isEnglish)).tag(AppearanceTheme.darkNight)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 220)
+        VStack(alignment: .leading, spacing: 16) {
+            Text(isEnglish ? "Choose how MemoFlow looks on your device." : "选择 MemoFlow 在此设备上的视觉呈现方式。")
+                .font(.caption)
+                .foregroundStyle(MFTheme.textSecondary)
+
+            VStack(spacing: 0) {
+                appearanceOptionRow(
+                    theme: .system,
+                    title: L10n.systemTheme(isEnglish),
+                    subtitle: isEnglish ? "Automatically match system light or dark mode." : "自动跟随操作系统浅色或深色外观设置。",
+                    icon: "circle.lefthalf.filled"
+                )
+                Divider().padding(.leading, 44).opacity(0.25)
+                appearanceOptionRow(
+                    theme: .warmPaper,
+                    title: L10n.lightTheme(isEnglish),
+                    subtitle: isEnglish ? "Warm cream paper texture for daytime focus." : "米黄色柔和护眼纸张底色，适合明亮光线环境。",
+                    icon: "sun.max.fill"
+                )
+                Divider().padding(.leading, 44).opacity(0.25)
+                appearanceOptionRow(
+                    theme: .darkNight,
+                    title: L10n.darkTheme(isEnglish),
+                    subtitle: isEnglish ? "Subdued dark palette for low-light focus." : "柔和深色暗夜主题，减轻暗光下的视觉疲劳。",
+                    icon: "moon.stars.fill"
+                )
             }
+            .mfGlassCard(cornerRadius: 14, padding: 0)
         }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    private func appearanceOptionRow(theme: AppearanceTheme, title: String, subtitle: String, icon: String) -> some View {
+        let isSelected = store.preferences.appearanceTheme == theme
+        return Button {
+            store.preferences.appearanceTheme = theme
+            store.saveToDisk()
+            showSavedFeedback()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? MFTheme.iceCyan : MFTheme.textSecondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 9. Language Subpage Content
 
     private var languageSubpageContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(L10n.language(isEnglish))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(MFTheme.textPrimary)
-                Spacer()
-                Picker(L10n.language(isEnglish), selection: Binding(
-                    get: { store.preferences.appLanguage },
-                    set: {
-                        store.preferences.appLanguage = $0
-                        store.saveToDisk()
-                        showSavedFeedback()
-                    }
-                )) {
-                    Text(L10n.languageOptionTitle(.system, isEnglish: isEnglish)).tag(AppLanguage.system)
-                    Text("简体中文").tag(AppLanguage.chinese)
-                    Text("English").tag(AppLanguage.english)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 240)
+        VStack(alignment: .leading, spacing: 16) {
+            Text(isEnglish ? "Select your preferred language for the interface." : "选择 MemoFlow 界面显示的默认语言。")
+                .font(.caption)
+                .foregroundStyle(MFTheme.textSecondary)
+
+            VStack(spacing: 0) {
+                languageOptionRow(
+                    lang: .system,
+                    title: L10n.languageOptionTitle(.system, isEnglish: isEnglish),
+                    subtitle: isEnglish ? "Follow system preferred language." : "跟随 macOS / iOS 系统首选语言。",
+                    icon: "globe"
+                )
+                Divider().padding(.leading, 44).opacity(0.25)
+                languageOptionRow(
+                    lang: .chinese,
+                    title: "简体中文",
+                    subtitle: "全部界面文本与说明以中文显示。",
+                    icon: "character.book.closed.fill"
+                )
+                Divider().padding(.leading, 44).opacity(0.25)
+                languageOptionRow(
+                    lang: .english,
+                    title: "English",
+                    subtitle: "All UI elements and guidelines displayed in English.",
+                    icon: "character.book.closed"
+                )
             }
+            .mfGlassCard(cornerRadius: 14, padding: 0)
         }
-        .mfGlassCard(cornerRadius: 16, padding: 16)
+    }
+
+    private func languageOptionRow(lang: AppLanguage, title: String, subtitle: String, icon: String) -> some View {
+        let isSelected = store.preferences.appLanguage == lang
+        return Button {
+            store.preferences.appLanguage = lang
+            store.saveToDisk()
+            showSavedFeedback()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? MFTheme.iceCyan : MFTheme.textSecondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(MFTheme.iceCyan)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 10. Privacy & Data Subpage Content
