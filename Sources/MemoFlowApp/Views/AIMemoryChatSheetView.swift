@@ -281,6 +281,28 @@ public struct AIMemoryChatSheetView: View {
                     }
                 }
 
+                // Cloud / Local Privacy & Model Notice
+                HStack(spacing: 6) {
+                    if canCallLLM {
+                        Image(systemName: "cloud")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MFTheme.iceCyan)
+                        Text(isEnglish ? "Cloud model: \(store.preferences.llmModelName) (summary & key quotes only)" : "云端模型：\(store.preferences.llmModelName)（仅发送选中录音摘要与核心发言）")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MFTheme.textSecondary)
+                    } else {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MFTheme.mintGreen)
+                        Text(isEnglish ? "Local mode: No LLM key configured, using offline rule engine" : "端侧本地模式：未配置 AI 密钥，将使用纯本地规则引擎提炼")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MFTheme.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(MFTheme.recessedBg, in: Capsule())
+
                 // Generate button
                 Button {
                     generateProjectDraft()
@@ -309,6 +331,11 @@ public struct AIMemoryChatSheetView: View {
                 .padding(.top, 6)
             }
         }
+    }
+
+    private var canCallLLM: Bool {
+        let key = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: store.preferences.llmBaseURL) ?? ""
+        return !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.preferences.llmModelName.isEmpty
     }
 
     private var selectedCandidateCount: Int {

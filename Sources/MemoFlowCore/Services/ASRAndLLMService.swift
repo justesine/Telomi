@@ -1990,7 +1990,69 @@ public final class ASRAndLLMService: Sendable {
         guard let rawMarkdown = env.choices.first?.message.content else {
             throw ProcessingPipelineError.invalidServerResponse(200, "LLM 返回内容为空")
         }
-        return rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.enrichProjectNoteWithVerifiableSourceLinks(markdown: trimmed, recordingsData: recordingsData)
+    }
+
+    /// CHAT-001: 为生成的项目笔记补充可核验的时间戳深链与来源录音元数据
+    public static func enrichProjectNoteWithVerifiableSourceLinks(
+        markdown: String,
+        recordingsData: [(recording: Recording, segments: [TranscriptSegment], note: NoteRevision?, actions: [ActionDraft])]
+    ) -> String {
+        var processed = markdown
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+
+        // 1. 为正文中的引用如 （来源：录音名，MM:SS 或 HH:MM:SS） 补充可点击的 memoflow:// 深链
+        for (rec, _, _, _) in recordingsData {
+            let escapedTitle = NSRegularExpression.escapedPattern(for: rec.title)
+            let pattern = "（来源：\(escapedTitle)，([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)）"
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsString = processed as NSString
+                let matches = regex.matches(in: processed, range: NSRange(location: 0, length: nsString.length)).reversed()
+                for match in matches {
+                    let fullRange = match.range(at: 0)
+                    let timeRange = match.range(at: 1)
+                    let timeText = nsString.substring(with: timeRange)
+                    let parts = timeText.split(separator: ":")
+                    let startMs: Int
+                    if parts.count == 3 {
+                        let h = Int(parts[0]) ?? 0
+                        let m = Int(parts[1]) ?? 0
+                        let s = Int(parts[2]) ?? 0
+                        startMs = (h * 3600 + m * 60 + s) * 1000
+                    } else if parts.count == 2 {
+                        let m = Int(parts[0]) ?? 0
+                        let s = Int(parts[1]) ?? 0
+                        startMs = (m * 60 + s) * 1000
+                    } else {
+                        startMs = 0
+                    }
+                    let linkified = "（来源：\(rec.title)，[\(timeText)](memoflow://recording/\(rec.id.uuidString)?startMs=\(startMs))）"
+                    processed = (processed as NSString).replacingCharacters(in: fullRange, with: linkified)
+                }
+            }
+        }
+
+        // 2. 规范化并强化「## 六、来源录音」真实元数据与可回听深链
+        var canonicalSources: [String] = []
+        for (rec, _, _, _) in recordingsData {
+            let recDate = dateFormatter.string(from: rec.createdAt)
+            let timeStr = TimeFormatting.formatDuration(rec.duration)
+            let reviewStatus = (rec.isTranscriptReviewed == true) ? "已人工校对" : "机器初稿（未校对）"
+            let link = "memoflow://recording/\(rec.id.uuidString)?startMs=0"
+            canonicalSources.append("- [\(rec.title)](\(link))｜\(recDate)｜时长: \(timeStr)｜状态: \(reviewStatus)｜ID: `\(rec.id.uuidString.prefix(8))`")
+        }
+        let canonicalSection = "## 六、来源录音\n\(canonicalSources.joined(separator: "\n"))"
+
+        if let range = processed.range(of: "## 六、来源录音") {
+            let prefix = processed[..<range.lowerBound]
+            processed = prefix.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + canonicalSection
+        } else {
+            processed = processed.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + canonicalSection
+        }
+
+        return processed
     }
 
     public func synthesizeProjectNoteLocally(
@@ -2083,7 +2145,7 @@ public final class ASRAndLLMService: Sendable {
 
         """ : ""
 
-        return """
+        let rawTemplate = """
         ---
         title: \(noteTitle)
         source: MemoFlow
@@ -2111,5 +2173,7 @@ public final class ASRAndLLMService: Sendable {
         ## 六、来源录音
         \(sourceLines.joined(separator: "\n"))
         """
+
+        return Self.enrichProjectNoteWithVerifiableSourceLinks(markdown: rawTemplate, recordingsData: recordingsData)
     }
 }

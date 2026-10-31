@@ -584,6 +584,15 @@ public final class MemoFlowStore: ObservableObject {
 
         let fm = FileManager.default
         let subfolder = preferences.obsidianTargetSubfolder.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 路径安全校验：防止相对路径穿越 (../) 或越界写入
+        if subfolder.contains("..") {
+            throw ObsidianSyncError.fileOperationFailed("目标子文件夹路径超出已授权笔记库范围")
+        }
+        if let existingRel = existingRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines), existingRel.contains("..") {
+            throw ObsidianSyncError.fileOperationFailed("目标文件路径超出已授权笔记库范围")
+        }
+
         let targetDirectoryURL = subfolder.isEmpty ? root : root.appendingPathComponent(subfolder)
 
         if !fm.fileExists(atPath: targetDirectoryURL.path) {

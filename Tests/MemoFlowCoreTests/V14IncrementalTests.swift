@@ -344,4 +344,113 @@ final class V14IncrementalTests: XCTestCase {
         XCTAssertTrue(markdown.contains("本地离线规则整理"), "未配置 LLM 时必须明确标注离线降级")
         XCTAssertTrue(markdown.contains("03:20"), "决策必须精准关联到发生时刻的时间戳，而不是总是 00:00")
     }
+
+    func testCHAT001_VerifiableDeepLinksAndCanonicalSourceList() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+
+        let idA = UUID()
+        let idB = UUID()
+        var recA = Recording(id: idA, title: "需求评审会", createdAt: Date(), duration: 600, localAudioFileName: "a.m4a")
+        recA.isTranscriptReviewed = true // 已校对
+
+        var recB = Recording(id: idB, title: "设计对齐会", createdAt: Date(), duration: 1200, localAudioFileName: "b.m4a")
+        recB.isTranscriptReviewed = false // 未校对初稿
+
+        store.recordings = [recA, recB]
+        store.segmentsByRecording[idA] = [
+            TranscriptSegment(id: "sa1", recordingId: idA, startMs: 120000, endMs: 125000, text: "UI 确认采用暖纸极简设计")
+        ]
+        store.segmentsByRecording[idB] = [
+            TranscriptSegment(id: "sb1", recordingId: idB, startMs: 300000, endMs: 305000, text: "底栏采用圆形悬浮菜单")
+        ]
+
+        let noteAId = UUID()
+        let noteA = Note(id: noteAId, recordingId: idA, mode: .meetingNote, currentRevisionId: UUID())
+        let revA = NoteRevision(
+            id: noteA.currentRevisionId,
+            noteId: noteAId,
+            mode: .meetingNote,
+            content: StructuredNoteContent(
+                suggestedTitle: "需求评审会",
+                summaryOrShortNote: "讨论 UI",
+                backgroundPoints: [],
+                keyPoints: [],
+                decisions: ["UI 确认采用暖纸极简设计"],
+                chapters: [],
+                historicalContextNotes: [],
+                aiInferences: []
+            ),
+            origin: .ai
+        )
+        store.notesByRecording[idA] = noteA
+        store.revisionsByNote[noteAId] = [revA]
+
+        let markdown = try await store.synthesizeProjectNote(topic: "界面设计", selectedRecordingIds: [idA, idB])
+
+        // 1. 验证关键决定引用带可回听的深链 [MM:SS](memoflow://recording/ID?startMs=...)
+        XCTAssertTrue(markdown.contains("memoflow://recording/\(idA.uuidString)?startMs=120000"), "引用必须带可直接回听对应秒数的深链")
+
+        // 2. 验证「六、来源录音」包含可点击录音深链与人工校对状态
+        XCTAssertTrue(markdown.contains("[需求评审会](memoflow://recording/\(idA.uuidString)?startMs=0)"))
+        XCTAssertTrue(markdown.contains("状态: 已人工校对"))
+        XCTAssertTrue(markdown.contains("[设计对齐会](memoflow://recording/\(idB.uuidString)?startMs=0)"))
+        XCTAssertTrue(markdown.contains("状态: 机器初稿（未校对）"))
+    }
+
+    func testCHAT001_PathSandboxAndDirectoryTraversalPrevention() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vaultDir = tempDir.appendingPathComponent("TestVault")
+        try FileManager.default.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+        store.bindObsidianVault(vaultDir)
+
+        // 尝试通过相对路径遍历逃逸出 Vault 目录
+        store.preferences.obsidianTargetSubfolder = "../../SecretDirectory"
+
+        XCTAssertThrowsError(
+            try store.exportProjectNoteToObsidian(
+                title: "越界测试",
+                markdown: "malicious content",
+                sourceRecordingIds: []
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("超出已授权笔记库范围"))
+        }
+    }
+
+    func testCHAT001_ExclusionOfDeselectedRecordingAndCancelDraft() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vaultDir = tempDir.appendingPathComponent("TestVault")
+        try FileManager.default.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+        store.bindObsidianVault(vaultDir)
+
+        let recA = Recording(id: UUID(), title: "录音A", createdAt: Date(), duration: 100, localAudioFileName: "a.m4a")
+        let recB = Recording(id: UUID(), title: "录音B", createdAt: Date(), duration: 200, localAudioFileName: "b.m4a")
+        let recC = Recording(id: UUID(), title: "绝密未勾选录音C", createdAt: Date(), duration: 300, localAudioFileName: "c.m4a")
+
+        store.recordings = [recA, recB, recC]
+        store.segmentsByRecording[recC.id] = [
+            TranscriptSegment(id: "sc", recordingId: recC.id, startMs: 0, endMs: 5000, text: "这里是绝密专有代码X99999")
+        ]
+
+        // 仅勾选 A 和 B，排除 C
+        let markdown = try await store.synthesizeProjectNote(topic: "测试", selectedRecordingIds: [recA.id, recB.id])
+
+        // 1. 验证 C 的任何独有内容和 ID 完全不出现在生成的笔记中
+        XCTAssertFalse(markdown.contains("绝密专有代码X99999"))
+        XCTAssertFalse(markdown.contains(recC.id.uuidString.prefix(8)))
+
+        // 2. 如果用户仅生成草稿预览、随后取消并未确认写入：Vault 目录中应有 0 个文件
+        let filesBeforeConfirm = try FileManager.default.contentsOfDirectory(atPath: vaultDir.path)
+        XCTAssertEqual(filesBeforeConfirm.count, 0, "未确认导出前绝对不向 Vault 写入任何文件")
+    }
 }
