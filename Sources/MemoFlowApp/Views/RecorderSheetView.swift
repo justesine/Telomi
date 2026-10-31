@@ -69,16 +69,16 @@ public struct RecorderSheetView: View {
             }
         }
         .confirmationDialog(
-            "确认结束并保存当前录音？",
+            isEnglish ? "Finish and save current recording?" : "确认结束并保存当前录音？",
             isPresented: $showingStopConfirmation,
             titleVisibility: .visible
         ) {
-            Button("结束并安全保存") {
+            Button(isEnglish ? "Save Securely" : "结束并安全保存") {
                 completeAndSaveRecording()
             }
-            Button("继续录音", role: .cancel) {}
+            Button(isEnglish ? "Continue Recording" : "继续录音", role: .cancel) {}
         } message: {
-            Text("音频将首先保存在本地设备，随后根据你的授权偏好进行转写与整理。")
+            Text(isEnglish ? "Audio is saved locally first, then transcribed and organized according to your preferences." : "音频将首先保存在本地设备，随后根据你的授权偏好进行转写与整理。")
         }
     }
 
@@ -108,7 +108,7 @@ public struct RecorderSheetView: View {
             Spacer()
 
             if !audioService.isRecording {
-                Button("关闭") {
+                Button(isEnglish ? "Close" : "关闭") {
                     dismiss()
                 }
                 .buttonStyle(.plain)
@@ -216,7 +216,7 @@ public struct RecorderSheetView: View {
     }
 
     private var liveStreamingToggle: some View {
-        Toggle("开启「边录边整理」（录音中持续切片与增量生成草稿）", isOn: $store.preferences.liveStreamingTranscriptionEnabled)
+        Toggle(isEnglish ? "Enable Live Streaming (Continuous slicing & incremental draft)" : "开启「边录边整理」（录音中持续切片与增量生成草稿）", isOn: $store.preferences.liveStreamingTranscriptionEnabled)
             .font(.system(size: 11))
             .foregroundStyle(MFTheme.textPrimary)
             .onChange(of: store.preferences.liveStreamingTranscriptionEnabled) { _, _ in
@@ -225,7 +225,7 @@ public struct RecorderSheetView: View {
     }
 
     private var offlineSimToggle: some View {
-        Toggle("模拟弱网/离线环境（验证「先安全保存·待联网转写」）", isOn: $simulateOfflineSave)
+        Toggle(isEnglish ? "Simulate weak / offline network (Save first, transcribe later)" : "模拟弱网/离线环境（验证「先安全保存·待联网转写」）", isOn: $simulateOfflineSave)
             .font(.system(size: 11))
             .foregroundStyle(MFTheme.textSecondary)
     }
@@ -234,7 +234,7 @@ public struct RecorderSheetView: View {
     private func liveStreamingStatusCard(progress: LiveStreamingProgress) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("边录边整理 · 实时草稿生成中", systemImage: "bolt.fill")
+                Label(isEnglish ? "Live Streaming · Generating Draft" : "边录边整理 · 实时草稿生成中", systemImage: "bolt.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(MFTheme.iceCyan)
                 Spacer()
@@ -248,7 +248,7 @@ public struct RecorderSheetView: View {
 
             if let draft = store.liveDraftRevision?.content, !draft.summaryOrShortNote.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(draft.suggestedTitle.isEmpty ? "实时草稿" : draft.suggestedTitle)
+                    Text(draft.suggestedTitle.isEmpty ? (isEnglish ? "Live Draft" : "实时草稿") : draft.suggestedTitle)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(MFTheme.textPrimary)
                     Text(draft.summaryOrShortNote)
@@ -265,12 +265,16 @@ public struct RecorderSheetView: View {
 
     private var statusTitle: String {
         if !audioService.isRecording {
-            return "准备就绪"
+            return isEnglish ? "Ready" : "准备就绪"
         }
         if audioService.activeLiveStreaming {
-            return audioService.isPaused ? "已暂停 · 实时分段已保护" : "正在录音 · 边录边整理中"
+            return audioService.isPaused
+                ? (isEnglish ? "Paused · Chunks preserved" : "已暂停 · 实时分段已保护")
+                : (isEnglish ? "Recording · Live streaming" : "正在录音 · 边录边整理中")
         }
-        return audioService.isPaused ? "已暂停（暂停段不计入音频）" : "正在录音 · 实时声学采集中"
+        return audioService.isPaused
+            ? (isEnglish ? "Paused" : "已暂停（暂停段不计入音频）")
+            : (isEnglish ? "Recording..." : "正在录音 · 实时声学采集中")
     }
 
     @ViewBuilder
@@ -297,7 +301,7 @@ public struct RecorderSheetView: View {
                                 .font(.title2)
                                 .foregroundStyle(MFTheme.textPrimary)
                         }
-                        Text(audioService.isPaused ? "继续录音" : "暂停")
+                        Text(audioService.isPaused ? (isEnglish ? "Resume" : "继续录音") : (isEnglish ? "Pause" : "暂停"))
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(MFTheme.textSecondary)
                     }
@@ -332,7 +336,7 @@ public struct RecorderSheetView: View {
                                 .fill(Color.white)
                                 .frame(width: 22, height: 22)
                         }
-                        Text("完成保存")
+                        Text(isEnglish ? "Finish & Save" : "完成保存")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(MFTheme.coralRed)
                     }
@@ -340,7 +344,7 @@ public struct RecorderSheetView: View {
                 .buttonStyle(.plain)
             }
         } else {
-            MFLuminousActionButton("启动麦克风录音", icon: "mic.fill") {
+            MFLuminousActionButton(isEnglish ? "Start Recording" : "启动麦克风录音", icon: "mic.fill") {
                 Task {
                     await beginRecordingNow()
                 }
@@ -387,6 +391,10 @@ public struct CloudConsentSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var rememberChoice: Bool = true
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     public init(store: MemoFlowStore) {
         self.store = store
     }
@@ -401,23 +409,23 @@ public struct CloudConsentSheetView: View {
                     Image(systemName: "lock.shield.fill")
                         .font(.title2)
                         .foregroundStyle(MFTheme.iceCyan)
-                    Text("云端语音转写与 AI 整理授权说明")
+                    Text(isEnglish ? "Cloud Speech & AI Processing Authorization" : "云端语音转写与 AI 整理授权说明")
                         .font(.headline)
                         .foregroundStyle(MFTheme.textPrimary)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("你的录音已在本地设备安全保存。")
+                    Text(isEnglish ? "Your audio is safely saved on this device first." : "你的录音已在本地设备安全保存。")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(MFTheme.mintGreen)
 
-                    Text("• 音频转写：\(store.preferences.asrEngineMode == .appleOnDevice ? "仅本机 Apple Speech" : (store.preferences.asrEngineMode == .localWhisper ? "仅本机 Whisper" : store.preferences.asrBaseURL))\n• 文字整理：\(store.preferences.llmBaseURL.isEmpty ? "本地规则" : store.preferences.llmBaseURL)\n• 边录边整理：\(store.preferences.liveStreamingTranscriptionEnabled ? "已开启（录音进行中将持续分段切片发送音频片段与文字增量生成草稿，原音频始终在本地完整保存）" : "未开启（停止录音后统一处理）")\n• 用途：转写录音、整理笔记与行动候选。云服务的数据保留和训练政策以各服务商条款为准；日历写入遵循你设置的审核模式。")
+                    Text(isEnglish ? "• Audio Transcription: \(store.preferences.asrEngineMode == .appleOnDevice ? "On-Device Apple Speech" : (store.preferences.asrEngineMode == .localWhisper ? "On-Device Whisper" : store.preferences.asrBaseURL))\n• Text Organization: \(store.preferences.llmBaseURL.isEmpty ? "Local Rules" : store.preferences.llmBaseURL)\n• Live Streaming: \(store.preferences.liveStreamingTranscriptionEnabled ? "Enabled (continuous audio slices sent during recording, local audio fully preserved)" : "Disabled (processed after recording stops)")\n• Purpose: Transcribe audio, synthesize notes, and extract actions. Calendar writes follow your review settings." : "• 音频转写：\(store.preferences.asrEngineMode == .appleOnDevice ? "仅本机 Apple Speech" : (store.preferences.asrEngineMode == .localWhisper ? "仅本机 Whisper" : store.preferences.asrBaseURL))\n• 文字整理：\(store.preferences.llmBaseURL.isEmpty ? "本地规则" : store.preferences.llmBaseURL)\n• 边录边整理：\(store.preferences.liveStreamingTranscriptionEnabled ? "已开启（录音进行中将持续分段切片发送音频片段与文字增量生成草稿，原音频始终在本地完整保存）" : "未开启（停止录音后统一处理）")\n• 用途：转写录音、整理笔记与行动候选。云服务的数据保留和训练政策以各服务商条款为准；日历写入遵循你设置的审核模式。")
                         .font(.footnote)
                         .foregroundStyle(MFTheme.textSecondary)
                 }
                 .mfGlassCard(cornerRadius: 14, padding: 14, tint: MFTheme.mintGreen)
 
-                Toggle("记住我的授权偏好（后续录音自动开始转写，可在设置中随时撤回）", isOn: $rememberChoice)
+                Toggle(isEnglish ? "Remember my choice (automatically process future recordings, can be revoked in Settings)" : "记住我的授权偏好（后续录音自动开始转写，可在设置中随时撤回）", isOn: $rememberChoice)
                     .font(.footnote)
                     .foregroundStyle(MFTheme.textSecondary)
 
@@ -426,7 +434,7 @@ public struct CloudConsentSheetView: View {
                         store.pendingConsentRecordingId = nil
                         dismiss()
                     } label: {
-                        Text("仅保留本地录音")
+                        Text(isEnglish ? "Keep Local Only" : "仅保留本地录音")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(MFTheme.textSecondary)
                             .frame(maxWidth: .infinity)
@@ -439,7 +447,7 @@ public struct CloudConsentSheetView: View {
                         store.grantCloudProcessingConsent(rememberPreference: rememberChoice)
                         dismiss()
                     } label: {
-                        Text("同意并开始转写整理")
+                        Text(isEnglish ? "Agree & Transcribe" : "同意并开始转写整理")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)

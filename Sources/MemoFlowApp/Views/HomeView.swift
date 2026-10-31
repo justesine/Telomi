@@ -1178,21 +1178,7 @@ public struct HomeView: View {
 
     private var luminousStartButton: some View {
         Button {
-            if audioService.isRecording {
-                showingRecorderSheet = true
-            } else if store.requiresCloudConsentForLiveRecording() {
-                showingRecorderSheet = true
-            } else {
-                startingRecording = true
-                Task {
-                    defer { startingRecording = false }
-                    do {
-                        _ = try await audioService.startRecording(liveStreaming: store.preferences.liveStreamingTranscriptionEnabled, speakerNicknameTheme: store.preferences.speakerNicknameTheme)
-                    } catch {
-                        store.lastBannerFeedback = error.localizedDescription
-                    }
-                }
-            }
+            showingRecorderSheet = true
         } label: {
             ZStack {
                 Circle()
@@ -1229,7 +1215,6 @@ public struct HomeView: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(startingRecording)
         .accessibilityLabel(audioService.isRecording ? (isEnglish ? "Recording controls" : "录音中，打开暂停与保存控制") : L10n.startRecording(isEnglish))
         .help(audioService.isRecording ? (isEnglish ? "Recording controls" : "录音中 · 点击暂停或保存") : L10n.startRecording(isEnglish))
     }

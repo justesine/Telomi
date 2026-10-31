@@ -96,6 +96,13 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
         case .event: return "日程活动"
         }
     }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .task: return isEnglish ? "Task" : "待办任务"
+        case .event: return isEnglish ? "Event" : "日程活动"
+        }
+    }
 }
 
 /// WATCH-001: 录音设备来源（PRD V1.4: iPhone/Mac 本机 或 Apple Watch 独立录音）
@@ -131,6 +138,14 @@ public enum ActionOwnership: String, Codable, CaseIterable, Sendable {
         case .uncertain: return "负责人未明确"
         }
     }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .selfOwner: return isEnglish ? "Self" : "本人负责"
+        case .other: return isEnglish ? "Other" : "他人负责（仅上下文）"
+        case .uncertain: return isEnglish ? "Unassigned" : "负责人未明确"
+        }
+    }
 }
 
 /// 日期精度（PRD 4.6 & R22: 明确时刻 / 仅日期 / 无日期 / 模糊待确认）
@@ -148,6 +163,15 @@ public enum DatePrecision: String, Codable, CaseIterable, Sendable {
         case .ambiguous: return "时间模糊需确认"
         }
     }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .exactTime: return isEnglish ? "Exact Time" : "精确时间"
+        case .dateOnly: return isEnglish ? "Date Only" : "仅日期（无具体时刻）"
+        case .none: return isEnglish ? "No Date" : "无日期"
+        case .ambiguous: return isEnglish ? "Ambiguous" : "时间模糊需确认"
+        }
+    }
 }
 
 /// 任务/行动主要管理位置（PRD R25 & 4.7: 本地 / Apple 日历 / Apple 提醒事项 / Markdown）
@@ -159,10 +183,19 @@ public enum PrimaryDestination: String, Codable, CaseIterable, Sendable {
 
     public var displayTitle: String {
         switch self {
-        case .local: return "MemoFlow 本地"
+        case .local: return "Telomi 本地"
         case .calendar: return "Apple 日历"
         case .reminders: return "Apple 提醒事项"
         case .markdown: return "Markdown / Obsidian"
+        }
+    }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .local: return isEnglish ? "Telomi Local" : "Telomi 本地"
+        case .calendar: return isEnglish ? "Apple Calendar" : "Apple 日历"
+        case .reminders: return isEnglish ? "Apple Reminders" : "Apple 提醒事项"
+        case .markdown: return isEnglish ? "Markdown / Obsidian" : "Markdown / Obsidian"
         }
     }
 }
@@ -190,6 +223,19 @@ public enum ActionExecutionStatus: String, Codable, CaseIterable, Sendable {
         case .pendingVerification: return "执行结果待核查"
         }
     }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .pendingConfirm: return isEnglish ? "Pending Review" : "待确认"
+        case .needsInfo: return isEnglish ? "Needs Info" : "需补充信息"
+        case .keptLocal: return isEnglish ? "Kept Local" : "本地保留"
+        case .handedToExternal: return isEnglish ? "Handed to External" : "已交给外部工具"
+        case .exportedMarkdown: return isEnglish ? "Exported to Markdown" : "已导出 Markdown"
+        case .ignored: return isEnglish ? "Ignored" : "已忽略"
+        case .executionFailed: return isEnglish ? "Execution Failed" : "执行失败"
+        case .pendingVerification: return isEnglish ? "Pending Verification" : "执行结果待核查"
+        }
+    }
 }
 
 /// 候选草稿审核状态
@@ -199,6 +245,26 @@ public enum DraftReviewStatus: String, Codable, Sendable {
     case confirmed = "confirmed"
     case ignored = "ignored"
     case hasDiffWithConfirmed = "has_diff_with_confirmed"
+
+    public var displayTitle: String {
+        switch self {
+        case .pending: return "待审核"
+        case .needsInfo: return "需补充信息"
+        case .confirmed: return "已确认"
+        case .ignored: return "已忽略"
+        case .hasDiffWithConfirmed: return "与已确认有差异"
+        }
+    }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .pending: return isEnglish ? "Pending" : "待审核"
+        case .needsInfo: return isEnglish ? "Needs Info" : "需补充信息"
+        case .confirmed: return isEnglish ? "Confirmed" : "已确认"
+        case .ignored: return isEnglish ? "Ignored" : "已忽略"
+        case .hasDiffWithConfirmed: return isEnglish ? "Diff with Confirmed" : "与已确认有差异"
+        }
+    }
 }
 
 /// 云处理授权模式（PRD R12 & 8.3: 记住授权 / 逐次确认）

@@ -747,4 +747,42 @@ final class V14IncrementalTests: XCTestCase {
         XCTAssertTrue(hex!.hasPrefix("#"))
         XCTAssertEqual(hex!.count, 7)
     }
+
+    func testActionModelsLocalizationAndBrand() throws {
+        // 验证 ActionKind 中英文本地化
+        XCTAssertEqual(ActionKind.task.localizedTitle(isEnglish: true), "Task")
+        XCTAssertEqual(ActionKind.task.localizedTitle(isEnglish: false), "待办任务")
+        XCTAssertEqual(ActionKind.event.localizedTitle(isEnglish: true), "Event")
+        XCTAssertEqual(ActionKind.event.localizedTitle(isEnglish: false), "日程活动")
+
+        // 验证 ActionOwnership 中英文本地化
+        XCTAssertEqual(ActionOwnership.selfOwner.localizedTitle(isEnglish: true), "Self")
+        XCTAssertEqual(ActionOwnership.selfOwner.localizedTitle(isEnglish: false), "本人负责")
+        XCTAssertEqual(ActionOwnership.other.localizedTitle(isEnglish: true), "Other")
+        XCTAssertEqual(ActionOwnership.uncertain.localizedTitle(isEnglish: true), "Unassigned")
+
+        // 验证 DatePrecision 中英文本地化
+        XCTAssertEqual(DatePrecision.exactTime.localizedTitle(isEnglish: true), "Exact Time")
+        XCTAssertEqual(DatePrecision.exactTime.localizedTitle(isEnglish: false), "精确时间")
+        XCTAssertEqual(DatePrecision.dateOnly.localizedTitle(isEnglish: true), "Date Only")
+        XCTAssertEqual(DatePrecision.none.localizedTitle(isEnglish: true), "No Date")
+        XCTAssertEqual(DatePrecision.ambiguous.localizedTitle(isEnglish: true), "Ambiguous")
+
+        // 验证 PrimaryDestination 中英文本地化与品牌名 Telomi
+        XCTAssertEqual(PrimaryDestination.local.localizedTitle(isEnglish: true), "Telomi Local")
+        XCTAssertEqual(PrimaryDestination.local.localizedTitle(isEnglish: false), "Telomi 本地")
+        XCTAssertEqual(PrimaryDestination.calendar.localizedTitle(isEnglish: true), "Apple Calendar")
+        XCTAssertEqual(PrimaryDestination.reminders.localizedTitle(isEnglish: true), "Apple Reminders")
+
+        // 验证 ActionExecutionStatus 中英文本地化
+        XCTAssertEqual(ActionExecutionStatus.pendingConfirm.localizedTitle(isEnglish: true), "Pending Review")
+        XCTAssertEqual(ActionExecutionStatus.pendingConfirm.localizedTitle(isEnglish: false), "待确认")
+        XCTAssertEqual(ActionExecutionStatus.needsInfo.localizedTitle(isEnglish: true), "Needs Info")
+        XCTAssertEqual(ActionExecutionStatus.keptLocal.localizedTitle(isEnglish: true), "Kept Local")
+
+        // 验证 DraftReviewStatus 中英文本地化
+        XCTAssertEqual(DraftReviewStatus.pending.localizedTitle(isEnglish: true), "Pending")
+        XCTAssertEqual(DraftReviewStatus.needsInfo.localizedTitle(isEnglish: true), "Needs Info")
+        XCTAssertEqual(DraftReviewStatus.confirmed.localizedTitle(isEnglish: true), "Confirmed")
+    }
 }

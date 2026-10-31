@@ -16,13 +16,25 @@ public struct UnifiedReviewView: View {
     @State private var isBatchRunning: Bool = false
 
     public enum KindFilter: String, CaseIterable {
-        case all = "全部"
-        case tasksOnly = "仅待办任务"
-        case eventsOnly = "仅日程活动"
+        case all = "all"
+        case tasksOnly = "tasks_only"
+        case eventsOnly = "events_only"
+
+        public func localizedTitle(isEnglish: Bool) -> String {
+            switch self {
+            case .all: return isEnglish ? "All" : "全部"
+            case .tasksOnly: return isEnglish ? "Tasks Only" : "仅待办任务"
+            case .eventsOnly: return isEnglish ? "Events Only" : "仅日程活动"
+            }
+        }
     }
 
     public init(store: MemoFlowStore) {
         self.store = store
+    }
+
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
     }
 
     private var filteredReadyDrafts: [ActionDraft] {
@@ -74,10 +86,10 @@ public struct UnifiedReviewView: View {
         }
         .focusEffectDisabled()
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
-        .navigationTitle(store.preferences.appLanguage.isEnglish ? "Unified Review" : "统一待确认区")
+        .navigationTitle(isEnglish ? "Unified Review" : "统一待确认区")
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Button(store.preferences.appLanguage.isEnglish ? "Done" : "完成") {
+                Button(isEnglish ? "Done" : "完成") {
                     dismiss()
                 }
             }
@@ -94,7 +106,7 @@ public struct UnifiedReviewView: View {
                             selectedFilter = f
                         }
                     } label: {
-                        Text(f.rawValue)
+                        Text(f.localizedTitle(isEnglish: isEnglish))
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(isSel ? Color.white : MFTheme.textSecondary)
                             .padding(.horizontal, 12)
@@ -114,7 +126,7 @@ public struct UnifiedReviewView: View {
 
             Spacer()
 
-            Toggle("已处理历史", isOn: $showingProcessedHistory)
+            Toggle(isEnglish ? "Processed History" : "已处理历史", isOn: $showingProcessedHistory)
                 .font(.caption)
                 .foregroundStyle(MFTheme.textSecondary)
                 .fixedSize()
@@ -126,17 +138,17 @@ public struct UnifiedReviewView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 HStack(spacing: 8) {
-                    Text("可直接确认执行")
+                    Text(isEnglish ? "Ready for Execution" : "可直接确认执行")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(MFTheme.textPrimary)
-                    MFBadgePill("\(filteredReadyDrafts.count) 项", color: MFTheme.iceCyan, icon: "checkmark.circle")
+                    MFBadgePill(isEnglish ? "\(filteredReadyDrafts.count) items" : "\(filteredReadyDrafts.count) 项", color: MFTheme.iceCyan, icon: "checkmark.circle")
                 }
 
                 Spacer()
 
                 if !filteredReadyDrafts.isEmpty {
                     MFLuminousActionButton(
-                        isBatchRunning ? "批量执行中…" : "批量执行已勾选 (\(selectedBatchDraftIds.count))",
+                        isBatchRunning ? (isEnglish ? "Executing…" : "批量执行中…") : (isEnglish ? "Batch Execute (\(selectedBatchDraftIds.count))" : "批量执行已勾选 (\(selectedBatchDraftIds.count))"),
                         icon: "bolt.fill",
                         tint: selectedBatchDraftIds.isEmpty ? MFTheme.textMuted : MFTheme.iceBlue
                     ) {
@@ -145,7 +157,9 @@ public struct UnifiedReviewView: View {
                             isBatchRunning = true
                             let res = await store.batchConfirmAndExecute(draftIds: selectedBatchDraftIds)
                             selectedBatchDraftIds.removeAll()
-                            batchExecutionSummary = "批量执行完成：成功 \(res.succeeded) 项，跳过或失败 \(res.skippedOrFailed) 项。"
+                            batchExecutionSummary = isEnglish
+                                ? "Batch execution complete: \(res.succeeded) succeeded, \(res.skippedOrFailed) skipped or failed."
+                                : "批量执行完成：成功 \(res.succeeded) 项，跳过或失败 \(res.skippedOrFailed) 项。"
                             isBatchRunning = false
                         }
                     }
@@ -153,7 +167,7 @@ public struct UnifiedReviewView: View {
             }
 
             if filteredReadyDrafts.isEmpty {
-                Text("暂无可直接一键执行的候选项")
+                Text(isEnglish ? "No actionable candidates ready for one-tap execution" : "暂无可直接一键执行的候选项")
                     .font(.caption)
                     .foregroundStyle(MFTheme.textMuted)
                     .padding(.vertical, 6)
@@ -172,7 +186,7 @@ public struct UnifiedReviewView: View {
                                     HStack(spacing: 6) {
                                         Image(systemName: selectedBatchDraftIds.contains(draft.id) ? "checkmark.square.fill" : "square")
                                             .foregroundStyle(MFTheme.iceCyan)
-                                        Text("加入批量确认（目标：\(draft.proposedDestination.displayTitle)）")
+                                        Text(isEnglish ? "Include in batch (Target: \(draft.proposedDestination.localizedTitle(isEnglish: isEnglish)))" : "加入批量确认（目标：\(draft.proposedDestination.localizedTitle(isEnglish: false))）")
                                             .font(.caption.weight(.medium))
                                             .foregroundStyle(MFTheme.textPrimary)
                                     }
@@ -188,7 +202,7 @@ public struct UnifiedReviewView: View {
                                         initialJumpMs: draft.evidenceStartMs
                                     )
                                 } label: {
-                                    Text("源录音：\(rec.title) →")
+                                    Text(isEnglish ? "Source: \(rec.title) →" : "源录音：\(rec.title) →")
                                         .font(.caption2)
                                         .foregroundStyle(MFTheme.iceCyan)
                                 }
@@ -207,19 +221,19 @@ public struct UnifiedReviewView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 HStack(spacing: 8) {
-                    Text("需补充信息 / 核对归属")
+                    Text(isEnglish ? "Needs Info / Ownership Check" : "需补充信息 / 核对归属")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(MFTheme.textPrimary)
-                    MFBadgePill("\(filteredNeedsInfoDrafts.count) 项", color: MFTheme.warmAmber, icon: "exclamationmark.triangle.fill")
+                    MFBadgePill(isEnglish ? "\(filteredNeedsInfoDrafts.count) items" : "\(filteredNeedsInfoDrafts.count) 项", color: MFTheme.warmAmber, icon: "exclamationmark.triangle.fill")
                 }
                 Spacer()
-                Text("不可混入批量一键写入")
+                Text(isEnglish ? "Cannot be batch written" : "不可混入批量一键写入")
                     .font(.caption2)
                     .foregroundStyle(MFTheme.warmAmber)
             }
 
             if filteredNeedsInfoDrafts.isEmpty {
-                Text("没有需要补充信息的模糊事项")
+                Text(isEnglish ? "No ambiguous items requiring additional information" : "没有需要补充信息的模糊事项")
                     .font(.caption)
                     .foregroundStyle(MFTheme.textMuted)
             } else {
@@ -227,7 +241,7 @@ public struct UnifiedReviewView: View {
                     if let rec = store.recordings.first(where: { $0.id == draft.recordingId }) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Label("需单独核实或补充时间", systemImage: "exclamationmark.triangle.fill")
+                                Label(isEnglish ? "Verify manually or clarify time" : "需单独核实或补充时间", systemImage: "exclamationmark.triangle.fill")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(MFTheme.warmAmber)
                                 Spacer()
@@ -238,7 +252,7 @@ public struct UnifiedReviewView: View {
                                         initialJumpMs: draft.evidenceStartMs
                                     )
                                 } label: {
-                                    Text("源录音：\(rec.title) →")
+                                    Text(isEnglish ? "Source: \(rec.title) →" : "源录音：\(rec.title) →")
                                         .font(.caption2)
                                         .foregroundStyle(MFTheme.iceCyan)
                                 }
@@ -256,10 +270,10 @@ public struct UnifiedReviewView: View {
     private var processedHistorySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("已处理行动记录")
+                Text(isEnglish ? "Processed Action History" : "已处理行动记录")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(MFTheme.textPrimary)
-                MFBadgePill("\(store.allConfirmedActions.count) 项", color: MFTheme.mintGreen)
+                MFBadgePill(isEnglish ? "\(store.allConfirmedActions.count) items" : "\(store.allConfirmedActions.count) 项", color: MFTheme.mintGreen)
             }
 
             ForEach(store.allConfirmedActions) { confirmed in

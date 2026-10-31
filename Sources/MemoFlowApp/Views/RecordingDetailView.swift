@@ -1309,6 +1309,10 @@ public struct ActionDraftReviewCard: View {
     @State private var editedDescription: String
     @State private var isExecuting: Bool = false
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     public init(store: MemoFlowStore, recording: Recording, draft: ActionDraft) {
         self.store = store
         self.recording = recording
@@ -1336,22 +1340,22 @@ public struct ActionDraftReviewCard: View {
     private var topBadgesRow: some View {
         HStack(spacing: 6) {
             MFBadgePill(
-                draft.kind.displayTitle,
+                draft.kind.localizedTitle(isEnglish: isEnglish),
                 color: draft.kind == .event ? MFTheme.softViolet : MFTheme.iceCyan,
                 icon: draft.kind == .event ? "calendar" : "checkmark.circle"
             )
 
             MFBadgePill(
-                draft.ownership.displayTitle,
+                draft.ownership.localizedTitle(isEnglish: isEnglish),
                 color: draft.ownership == .selfOwner ? MFTheme.mintGreen : MFTheme.warmAmber
             )
 
-            Text(draft.datePrecision.displayTitle)
+            Text(draft.datePrecision.localizedTitle(isEnglish: isEnglish))
                 .font(.caption2)
                 .foregroundStyle(MFTheme.textSecondary)
 
             if draft.isDefaultDurationApplied, let mins = draft.appliedDefaultDurationMinutes {
-                MFBadgePill("默认 \(mins) 分钟", color: MFTheme.warmAmber)
+                MFBadgePill(isEnglish ? "Default \(mins)m" : "默认 \(mins) 分钟", color: MFTheme.warmAmber)
             }
 
             Spacer()
@@ -1359,7 +1363,7 @@ public struct ActionDraftReviewCard: View {
     }
 
     private var descriptionInputRow: some View {
-        TextField("事项描述", text: $editedDescription)
+        TextField(isEnglish ? "Action Description" : "事项描述", text: $editedDescription)
             .font(.subheadline.weight(.semibold))
             .textFieldStyle(.plain)
             .foregroundStyle(MFTheme.textPrimary)
@@ -1381,13 +1385,13 @@ public struct ActionDraftReviewCard: View {
             HStack(spacing: 6) {
                 Image(systemName: "calendar.badge.clock")
                     .foregroundStyle(MFTheme.iceCyan)
-                Text("原话时间：「\(rawDate)」")
+                Text(isEnglish ? "Original: “\(rawDate)”" : "原话时间：「\(rawDate)」")
                 if let start = draft.startAt {
                     Text("→ \(start.formatted(date: .abbreviated, time: .shortened))")
                         .fontWeight(.medium)
                         .foregroundStyle(MFTheme.textPrimary)
                 } else if let due = draft.dueDate {
-                    Text("→ \(due.formatted(date: .abbreviated, time: .omitted))（仅日期）")
+                    Text("→ \(due.formatted(date: .abbreviated, time: .omitted))\(isEnglish ? " (Date only)" : "（仅日期）")")
                         .fontWeight(.medium)
                         .foregroundStyle(MFTheme.textPrimary)
                 }
@@ -1403,7 +1407,7 @@ public struct ActionDraftReviewCard: View {
                 Image(systemName: "quote.opening")
                     .font(.caption2)
                     .foregroundStyle(MFTheme.iceCyan)
-                Text(draft.evidenceQuote.isEmpty ? "（未提取到原话引用，需人工核实）" : "「\(draft.evidenceQuote)」")
+                Text(draft.evidenceQuote.isEmpty ? (isEnglish ? "(No original quote extracted, manual verification required)" : "（未提取到原话引用，需人工核实）") : "“\(draft.evidenceQuote)”")
                     .font(.caption)
                     .italic()
                     .foregroundStyle(MFTheme.textPrimary)
@@ -1415,7 +1419,7 @@ public struct ActionDraftReviewCard: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "headphones")
-                        Text("回听原话证据区间 (\(TimeFormatting.formatMilliseconds(startMs)) - \(TimeFormatting.formatMilliseconds(endMs)))")
+                        Text(isEnglish ? "Playback Quote Audio (\(TimeFormatting.formatMilliseconds(startMs)) - \(TimeFormatting.formatMilliseconds(endMs)))" : "回听原话证据区间 (\(TimeFormatting.formatMilliseconds(startMs)) - \(TimeFormatting.formatMilliseconds(endMs)))")
                     }
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 9)
@@ -1430,7 +1434,7 @@ public struct ActionDraftReviewCard: View {
                     copy.isEvidenceVerifiedByUser = true
                     store.updateDraft(copy)
                 } label: {
-                    Label("缺少时间定位 · 点击确认已人工核实原话", systemImage: "exclamationmark.shield")
+                    Label(isEnglish ? "Missing audio timestamp · Tap to mark verified" : "缺少时间定位 · 点击确认已人工核实原话", systemImage: "exclamationmark.shield")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(MFTheme.warmAmber)
                 }
@@ -1464,20 +1468,20 @@ public struct ActionDraftReviewCard: View {
 
     private var bottomActionRow: some View {
         HStack(spacing: 10) {
-            Picker("主要去向", selection: $selectedDestination) {
+            Picker(isEnglish ? "Destination" : "主要去向", selection: $selectedDestination) {
                 if draft.kind == .event && draft.datePrecision == .exactTime {
-                    Text("Apple 日历").tag(PrimaryDestination.calendar)
+                    Text(isEnglish ? "Apple Calendar" : "Apple 日历").tag(PrimaryDestination.calendar)
                 }
-                Text("Apple 提醒事项").tag(PrimaryDestination.reminders)
-                Text("Markdown 待办").tag(PrimaryDestination.markdown)
-                Text("仅本地保留").tag(PrimaryDestination.local)
+                Text(isEnglish ? "Apple Reminders" : "Apple 提醒事项").tag(PrimaryDestination.reminders)
+                Text(isEnglish ? "Markdown Tasks" : "Markdown 待办").tag(PrimaryDestination.markdown)
+                Text(isEnglish ? "Telomi Local Only" : "仅本地保留").tag(PrimaryDestination.local)
             }
             .pickerStyle(.menu)
             .font(.caption)
 
             Spacer()
 
-            Button("忽略") {
+            Button(isEnglish ? "Ignore" : "忽略") {
                 store.ignoreDraft(draft)
             }
             .font(.caption)
@@ -1485,7 +1489,7 @@ public struct ActionDraftReviewCard: View {
             .buttonStyle(.plain)
 
             MFLuminousActionButton(
-                isExecuting ? "执行中…" : "确认并分流",
+                isExecuting ? (isEnglish ? "Executing..." : "执行中…") : (isEnglish ? "Confirm & Route" : "确认并分流"),
                 icon: "checkmark.circle.fill",
                 tint: draft.hasValidEvidence ? MFTheme.iceBlue : MFTheme.textMuted
             ) {
@@ -1509,6 +1513,10 @@ public struct ConfirmedActionRowCard: View {
     @ObservedObject var store: MemoFlowStore
     let recording: Recording
     let confirmed: ConfirmedAction
+
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
 
     public var body: some View {
         let snap = confirmed.confirmedSnapshot
@@ -1537,8 +1545,8 @@ public struct ConfirmedActionRowCard: View {
                         .strikethrough(confirmed.allowsLocalCompletionToggle && confirmed.localCompletion == true)
 
                     HStack(spacing: 8) {
-                        Text("主要管理位置：\(confirmed.primaryDestination.displayTitle)")
-                        Text("· 状态：\(confirmed.executionStatus.displayTitle)")
+                        Text(isEnglish ? "Destination: \(confirmed.primaryDestination.localizedTitle(isEnglish: isEnglish))" : "主要管理位置：\(confirmed.primaryDestination.localizedTitle(isEnglish: false))")
+                        Text(isEnglish ? "· Status: \(confirmed.executionStatus.localizedTitle(isEnglish: isEnglish))" : "· 状态：\(confirmed.executionStatus.localizedTitle(isEnglish: false))")
                         if let container = link?.targetContainerTitle {
                             Text("(\(container))")
                         }
@@ -1564,14 +1572,14 @@ public struct ConfirmedActionRowCard: View {
                 }
 
                 Menu {
-                    Button("切换为 MemoFlow 本地管理") {
+                    Button(isEnglish ? "Switch to Telomi Local" : "切换为 Telomi 本地管理") {
                         store.switchPrimaryDestination(recordingId: recording.id, confirmedActionId: confirmed.id, newDestination: .local)
                     }
-                    Button("切换为 Markdown 待办管理") {
+                    Button(isEnglish ? "Switch to Markdown Tasks" : "切换为 Markdown 待办管理") {
                         store.switchPrimaryDestination(recordingId: recording.id, confirmedActionId: confirmed.id, newDestination: .markdown)
                     }
                     if confirmed.executionStatus == .executionFailed {
-                        Button("重试写入 \(confirmed.primaryDestination.displayTitle)") {
+                        Button(isEnglish ? "Retry writing to \(confirmed.primaryDestination.localizedTitle(isEnglish: true))" : "重试写入 \(confirmed.primaryDestination.localizedTitle(isEnglish: false))") {
                             Task {
                                 let retryDraft = ActionDraft(
                                     id: confirmed.sourceDraftId,
