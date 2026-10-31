@@ -168,7 +168,7 @@ public enum ProcessingPipelineError: LocalizedError {
         case .speechPermissionDenied:
             return "未获得系统语音识别权限，请在系统设置中开启或改用 OpenAI 兼容语音接口。"
         case .emptyTranscription:
-            return "未识别到有效语音内容，请检查录音音量或重试。"
+            return "未识别到有效语音内容（可能录音时长过短、音量较小或未检测到清晰人声），原音频已安全保存，可靠近麦克风或说长一点重试。"
         case .audioProcessingFailed(let detail):
             return "音频处理或切片失败（\(detail)），原录音已安全保存。"
         }
@@ -242,6 +242,20 @@ public final class ASRAndLLMService: Sendable {
             guard !key.isEmpty else {
                 throw ProcessingPipelineError.missingAPIKey("语音转写 (ASR)")
             }
+
+            // 短音频（<= 180 秒 / 3 分钟）直接发送原音频文件，避免 AVAssetExportSession 重复切片与首尾帧截断
+            if duration <= 180.0 {
+                let segments = try await transcribeWithOpenAICompatibleAPI(
+                    fileURL: fileURL,
+                    recording: source,
+                    baseURL: preferences.asrBaseURL,
+                    modelName: preferences.asrModelName,
+                    apiKey: key
+                )
+                try AudioSourceValidation.validateSegments(segments, recording: source)
+                return segments
+            }
+
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mf_cloud_\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -536,9 +550,19 @@ public final class ASRAndLLMService: Sendable {
             appendFormField(name: "response_format", value: "verbose_json")
         }
 
+        let ext = fileURL.pathExtension.lowercased()
+        let mimeType: String
+        switch ext {
+        case "m4a": mimeType = "audio/m4a"
+        case "mp3": mimeType = "audio/mpeg"
+        case "wav": mimeType = "audio/wav"
+        case "caf": mimeType = "audio/x-caf"
+        default: mimeType = "audio/m4a"
+        }
+
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileURL.lastPathComponent)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(audioData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
@@ -580,6 +604,13 @@ public final class ASRAndLLMService: Sendable {
         return try parseASRResponseData(data, recordingId: recording.id, totalDuration: recording.duration)
     }
 
+    /// 清理 SenseVoice 等模型输出的富文本标签，如 <|zh|><|NEUTRAL|><|Speech|><|withitn|> 或 <|nospeech|>
+    public static func cleanSenseVoiceTags(_ text: String) -> String {
+        let pattern = "<\\|[a-zA-Z0-9_.-]+\\|>"
+        return text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public func parseASRResponseData(
         _ data: Data,
         recordingId: UUID,
@@ -602,7 +633,9 @@ public final class ASRAndLLMService: Sendable {
         // 1. 若返回了带时间戳的 segments（如 OpenAI / Groq Whisper verbose_json）
         if let rawSegments = decoded.segments, !rawSegments.isEmpty {
             let mapped = try rawSegments.enumerated().compactMap { index, seg -> TranscriptSegment? in
-                let trimmed = (seg.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawText = seg.text ?? ""
+                let cleaned = Self.cleanSenseVoiceTags(rawText)
+                let trimmed = cleaned.isEmpty ? rawText.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
                 guard !trimmed.isEmpty else { return nil }
                 guard let start = seg.start, let end = seg.end, start.isFinite, end.isFinite,
                       start >= 0, end > start, start < totalDuration, end <= totalDuration + 0.25 else {
@@ -624,8 +657,10 @@ public final class ASRAndLLMService: Sendable {
             }
         }
 
-        // 2. 若返回纯文本 text（如 SiliconFlow SenseVoiceSmall），按标点切句并按字数比例分配时间轴
-        let fullText = (decoded.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 2. 若返回纯文本 text（如 SiliconFlow SenseVoiceSmall），清理富文本标签并按标点切句
+        let rawText = decoded.text ?? ""
+        let cleaned = Self.cleanSenseVoiceTags(rawText)
+        let fullText = cleaned.isEmpty ? rawText.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
         guard !fullText.isEmpty else {
             throw ProcessingPipelineError.emptyTranscription
         }
@@ -1801,15 +1836,15 @@ public final class ASRAndLLMService: Sendable {
 
         switch category {
         case .asr:
-            let asrKeywords = ["sensevoice", "whisper", "transcribe", "paraformer"]
-            let excludeKeywords = ["cosyvoice", "tts", "voice-clone", "chat", "instruct", "audio-", "telespeech", "diarize"]
+            let asrKeywords = ["sensevoice", "whisper", "transcribe", "paraformer", "telespeech", "asr", "conformer", "funasr"]
+            let excludeKeywords = ["cosyvoice", "tts", "voice-clone", "chat", "instruct", "audio-visual", "text-to-speech"]
             let matched = allIds.filter { id in
                 let lower = id.lowercased()
                 let isASR = asrKeywords.contains(where: { lower.contains($0) })
                 let isExcluded = excludeKeywords.contains(where: { lower.contains($0) })
                 return isASR && !isExcluded
             }
-            return matched.isEmpty ? ["FunAudioLLM/SenseVoiceSmall"] : matched.sorted()
+            return matched.isEmpty ? ["FunAudioLLM/SenseVoiceSmall", "TeleAI/TeleSpeechASR"] : matched.sorted()
 
         case .llm:
             let excludeKeywords = ["whisper", "sensevoice", "telespeech", "embedding", "bge-", "rerank", "tts", "cosyvoice", "flux", "stable-diffusion", "dall-e", "moderation"]

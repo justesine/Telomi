@@ -83,7 +83,13 @@ public enum ASRProviderOption: String, CaseIterable, Identifiable {
         switch self {
         case .siliconFlow:
             return [
-                ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 中英混杂极快 · 官方稳定在架）")
+                ("FunAudioLLM/SenseVoiceSmall", "SenseVoiceSmall（阿里开源 · 多语言/中英混杂极快 · 官方推荐）"),
+                ("TeleAI/TeleSpeechASR", "TeleSpeechASR（中国电信星辰 · 高精度普通话转写）"),
+                ("openai/whisper-large-v3-turbo", "Whisper Large v3 Turbo（OpenAI 极速带时间戳）"),
+                ("openai/whisper-large-v3", "Whisper Large v3（OpenAI 高精度全量模型）"),
+                ("openai/whisper-medium", "Whisper Medium（平衡型多语种）"),
+                ("openai/whisper-small", "Whisper Small（轻量极速模型）"),
+                ("openai/whisper-base", "Whisper Base（轻量基础模型）")
             ]
         case .appleLocal:
             return [("apple-speech", "系统内置 SFSpeechRecognizer（中文/多语种）")]

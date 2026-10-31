@@ -462,9 +462,6 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             self.isPaused = false
             self.shouldResumeAfterInterruption = false
             self.currentRecordingDuration = 0
-            #if os(iOS)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            #endif
             return (id, fileName, createdAt, finalDuration)
         }
 
@@ -482,9 +479,6 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         self.isPaused = false
         self.shouldResumeAfterInterruption = false
         self.currentRecordingDuration = 0
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
 
         return (id, fileName, createdAt, finalDuration)
     }
