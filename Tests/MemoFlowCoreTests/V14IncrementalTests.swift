@@ -453,4 +453,232 @@ final class V14IncrementalTests: XCTestCase {
         let filesBeforeConfirm = try FileManager.default.contentsOfDirectory(atPath: vaultDir.path)
         XCTAssertEqual(filesBeforeConfirm.count, 0, "未确认导出前绝对不向 Vault 写入任何文件")
     }
+
+    // MARK: - Phase 3 & 4 Tests (DIAR-001, BUG-003, CAL-001, VIS-001/REC-003)
+
+    func testDIAR001_MultiSpeakerConferenceAndThemeSwitchingWithManualOverrides() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+
+        let recId = UUID()
+        var recording = Recording(
+            id: recId,
+            title: "四人战略对齐会议",
+            createdAt: Date(),
+            duration: 1200,
+            localAudioFileName: "conf.m4a"
+        )
+        recording.speakerNicknameTheme = .strangerThings
+        store.recordings = [recording]
+
+        // 构造包含 4 位不同说话人的转写分段（按首次出现顺序：spk_0 -> spk_1 -> spk_2 -> spk_3）
+        let initialSegments: [TranscriptSegment] = [
+            TranscriptSegment(id: "s1", recordingId: recId, startMs: 0, endMs: 10000, text: "大家上午好，开始本周进度汇报", speakerId: "spk_0"),
+            TranscriptSegment(id: "s2", recordingId: recId, startMs: 11000, endMs: 25000, text: "客户端目前已完成长录音的稳定性优化", speakerId: "spk_1"),
+            TranscriptSegment(id: "s3", recordingId: recId, startMs: 26000, endMs: 40000, text: "服务端接口对齐了跨录音整理返回", speakerId: "spk_2"),
+            TranscriptSegment(id: "s4", recordingId: recId, startMs: 41000, endMs: 55000, text: "测试用例自动化已全量通过", speakerId: "spk_3"),
+            TranscriptSegment(id: "s5", recordingId: recId, startMs: 56000, endMs: 70000, text: "好的，请客户端继续推进闭环", speakerId: "spk_0")
+        ]
+        store.segmentsByRecording[recId] = initialSegments
+
+        // 绑定两个行动项草稿
+        let draft0 = ActionDraft(
+            id: UUID(),
+            recordingId: recId,
+            revisionId: UUID(),
+            kind: .task,
+            description: "把控总体进度与发版窗口",
+            owner: "spk_0",
+            ownership: .other,
+            proposedDestination: .reminders
+        )
+        let draft1 = ActionDraft(
+            id: UUID(),
+            recordingId: recId,
+            revisionId: UUID(),
+            kind: .task,
+            description: "完成全屏适配并消除黑边",
+            owner: "spk_1",
+            ownership: .other,
+            proposedDestination: .reminders
+        )
+        store.actionDraftsByRecording[recId] = [draft0, draft1]
+
+        // 1. 验证怪奇物语主题下按首次出现分配昵称（Dustin, Max, Lucas, Will）
+        store.reapplySpeakerDiarizationAndNicknames(for: recId)
+        let diarized = store.segmentsByRecording[recId] ?? []
+        XCTAssertEqual(diarized[0].speakerName, "Dustin")
+        XCTAssertEqual(diarized[1].speakerName, "Max")
+        XCTAssertEqual(diarized[2].speakerName, "Lucas")
+        XCTAssertEqual(diarized[3].speakerName, "Will")
+        XCTAssertEqual(diarized[4].speakerName, "Dustin")
+
+        // 2. 人工改名：用户将 spk_0 改名为「张总」，将 spk_1 改名为「我」
+        store.updateSpeakerName(recordingId: recId, speakerId: "spk_0", newName: "张总")
+        store.updateSpeakerName(recordingId: recId, speakerId: "spk_1", newName: "我")
+
+        // 验证改名生效及 ActionDraft 级联（所有权自动升级为 selfOwner）
+        let updatedSegs = store.segmentsByRecording[recId] ?? []
+        XCTAssertEqual(updatedSegs[0].speakerName, "张总")
+        XCTAssertEqual(updatedSegs[1].speakerName, "我")
+        XCTAssertEqual(updatedSegs[4].speakerName, "张总")
+
+        let updatedDrafts = store.actionDraftsByRecording[recId] ?? []
+        XCTAssertEqual(updatedDrafts[0].owner, "张总")
+        XCTAssertEqual(updatedDrafts[0].ownership, .other)
+        XCTAssertEqual(updatedDrafts[1].owner, "我")
+        XCTAssertEqual(updatedDrafts[1].ownership, .selfOwner, "当说话人重命名为「我」时，行动项归属必须级联升级为本人负责")
+
+        // 3. 切换主题为《星际穿越》并再次应用分离：
+        // 验证人工改名的「张总」和「我」绝对不被新主题冲掉；未人工改名的 spk_2/spk_3 分配星际穿越角色
+        if let idx = store.recordings.firstIndex(where: { $0.id == recId }) {
+            store.recordings[idx].speakerNicknameTheme = .interstellar
+        }
+        store.reapplySpeakerDiarizationAndNicknames(for: recId)
+        let reDiarized = store.segmentsByRecording[recId] ?? []
+        XCTAssertEqual(reDiarized[0].speakerName, "张总", "人工名称在切换主题后必须严格保留")
+        XCTAssertEqual(reDiarized[1].speakerName, "我", "人工名称在切换主题后必须严格保留")
+        XCTAssertEqual(reDiarized[2].speakerName, "Cooper", "未人工命名的说话人按新主题角色分配")
+        XCTAssertEqual(reDiarized[3].speakerName, "Murph", "未人工命名的说话人按新主题角色分配")
+        XCTAssertEqual(reDiarized[4].speakerName, "张总", "同一说话人后续分段同样保持人工名称")
+    }
+
+    func testBUG003_VoiceProfileDefenseAndStateChecks() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let stateURL = tempDir.appendingPathComponent("state.json")
+        let store = MemoFlowStore(customStorageURL: stateURL)
+
+        // 1. 验证空声纹状态
+        XCTAssertNil(store.preferences.userVoiceProfile)
+
+        // 2. 注册合法声纹档案（记录 enrolledAt 与 sampleDuration）
+        let profileId = UUID()
+        let now = Date()
+        var profile = UserVoiceProfile(
+            id: profileId,
+            enrolledAt: now,
+            sampleDuration: 12.5,
+            featureDescription: "已录入个人声纹特征档案",
+            sampleAudioFileName: "VoiceProfile/profile_\(profileId.uuidString).m4a"
+        )
+        profile.embedding = [0.12, -0.45, 0.88, 0.03]
+        profile.embeddingModel = "FluidAudio"
+        store.preferences.userVoiceProfile = profile
+        let saveSuccess = store.saveToDisk()
+        XCTAssertTrue(saveSuccess, "保存声纹数据至持久化磁盘必须成功")
+
+        // 重新从磁盘加载，验证持久化
+        let reloadedStore = MemoFlowStore(customStorageURL: stateURL)
+        XCTAssertNotNil(reloadedStore.preferences.userVoiceProfile)
+        XCTAssertEqual(reloadedStore.preferences.userVoiceProfile?.id, profileId)
+        XCTAssertEqual(reloadedStore.preferences.userVoiceProfile?.sampleDuration, 12.5)
+        XCTAssertEqual(reloadedStore.preferences.userVoiceProfile?.embeddingModel, "FluidAudio")
+        XCTAssertEqual(reloadedStore.preferences.userVoiceProfile?.embedding?.count, 4)
+
+        // 3. 删除声纹档案
+        reloadedStore.deleteVoiceProfile()
+        XCTAssertNil(reloadedStore.preferences.userVoiceProfile)
+
+        let reloadedAfterDelete = MemoFlowStore(customStorageURL: stateURL)
+        XCTAssertNil(reloadedAfterDelete.preferences.userVoiceProfile)
+    }
+
+    func testCAL001_EventKitAntiDuplicationChecks() async throws {
+        let service = EventKitIntegrationService.shared
+        let recId = UUID()
+
+        let baseDraft = ActionDraft(
+            id: UUID(),
+            recordingId: recId,
+            revisionId: UUID(),
+            kind: .event,
+            description: "季度战略发布会",
+            location: "7号会议室",
+            owner: "我",
+            ownership: .selfOwner,
+            originalDateText: "下周一上午",
+            dueDate: nil,
+            startAt: Date(),
+            endAt: Date().addingTimeInterval(3600),
+            datePrecision: .exactTime,
+            timeZoneIdentifier: "Asia/Shanghai",
+            proposedDestination: .calendar
+        )
+        let snap = ActionSnapshot(from: baseDraft)
+
+        // 1. 验证 pendingVerification 状态被防重拦截
+        let pendingAction = ConfirmedAction(
+            recordingId: recId,
+            sourceDraftId: baseDraft.id,
+            confirmedSnapshot: snap,
+            primaryDestination: .calendar,
+            executionStatus: .pendingVerification
+        )
+
+        let pendingResult = await service.createCalendarEvent(
+            for: pendingAction,
+            recordingTitle: "周会",
+            existingLink: nil,
+            preferredCalendarId: nil
+        )
+        if case .blockedPendingVerification(let reason) = pendingResult {
+            XCTAssertTrue(reason.contains("不确定"))
+        } else {
+            XCTFail("对于 pendingVerification 状态必须拦截防重")
+        }
+
+        // 2. 验证已成功写入并有外部 ID 的事件被跳过防重
+        let completedAction = ConfirmedAction(
+            recordingId: recId,
+            sourceDraftId: baseDraft.id,
+            confirmedSnapshot: snap,
+            primaryDestination: .calendar,
+            executionStatus: .handedToExternal
+        )
+        let link = ExternalActionLink(
+            confirmedActionId: completedAction.id,
+            targetType: .calendar,
+            externalIdentifier: "EKEvent-UUID-9999",
+            lastConfirmedSnapshot: snap
+        )
+
+        let completedResult = await service.createCalendarEvent(
+            for: completedAction,
+            recordingTitle: "周会",
+            existingLink: link,
+            preferredCalendarId: nil
+        )
+        if case .skippedAlreadyCreated(let extId) = completedResult {
+            XCTAssertEqual(extId, "EKEvent-UUID-9999")
+        } else {
+            XCTFail("对于已写入并有外部 ID 的日程必须跳过避免重复")
+        }
+    }
+
+    func testVIS001_LaunchScreenAndBackgroundAudioConfiguration() throws {
+        // 验证 LaunchScreen.storyboard 存在并且包含标准根视图与暖纸背景色
+        let sourceDir = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent() // MemoFlowCoreTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // root
+        let launchScreenURL = sourceDir.appendingPathComponent("Sources/MemoFlowApp/LaunchScreen.storyboard")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: launchScreenURL.path), "LaunchScreen.storyboard 必须存在以消除 iPhone 上下黑边")
+
+        let content = try String(contentsOf: launchScreenURL, encoding: .utf8)
+        XCTAssertTrue(content.contains("launchScreen=\"YES\""))
+        XCTAssertTrue(content.contains("Ze5-6b-2t3"))
+
+        // 验证 Info.plist 正确配置了 UILaunchStoryboardName 和后台音频录制模式
+        let infoPlistURL = sourceDir.appendingPathComponent("Info.plist")
+        let infoContent = try String(contentsOf: infoPlistURL, encoding: .utf8)
+        XCTAssertTrue(infoContent.contains("<key>UILaunchStoryboardName</key>"))
+        XCTAssertTrue(infoContent.contains("<string>LaunchScreen</string>"))
+        XCTAssertTrue(infoContent.contains("<string>audio</string>"), "必须配置 audio 后台模式支持切后台/锁屏录音")
+    }
 }

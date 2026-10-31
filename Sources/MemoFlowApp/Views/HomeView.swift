@@ -257,7 +257,7 @@ public struct HomeView: View {
                 Capsule()
                     .fill(MFTheme.cardSurfaceGradient)
                     .overlay(
-                        Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)
+                        Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
                     )
             )
 
@@ -275,11 +275,12 @@ public struct HomeView: View {
                             Circle()
                                 .fill(MFTheme.cardSurfaceGradient)
                                 .overlay(
-                                    Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                    Circle().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
                                 )
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(L10n.serviceAndSettings(isEnglish))
                 .help(L10n.serviceAndSettings(isEnglish))
 
                 Spacer()
@@ -298,11 +299,12 @@ public struct HomeView: View {
                                     Circle()
                                         .fill(MFTheme.cardSurfaceGradient)
                                         .overlay(
-                                            Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                            Circle().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
                                         )
                                 )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(L10n.obsidianSyncTooltip(isEnglish))
                         .help(L10n.obsidianSyncTooltip(isEnglish))
                     }
 
@@ -317,11 +319,12 @@ public struct HomeView: View {
                                 Circle()
                                     .fill(MFTheme.cardSurfaceGradient)
                                     .overlay(
-                                        Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                                        Circle().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
                                     )
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(isEnglish ? "AI Memory Assistant" : "AI 记忆助手 · 跨录音整理")
                     .help(isEnglish ? "AI Memory & Project Note Assistant" : "AI 记忆助手 · 跨录音整理")
                 }
             }

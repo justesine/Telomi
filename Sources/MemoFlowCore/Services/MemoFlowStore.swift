@@ -710,14 +710,29 @@ public final class MemoFlowStore: ObservableObject {
 
     public func resolveSpeakerNames(_ segments: [TranscriptSegment], recording: Recording) -> [TranscriptSegment] {
         let overrides = recording.manualSpeakerNames ?? [:]
+        let allThemeNicknames = Set(SpeakerNicknameTheme.allCases.flatMap(\.defaultNicknames))
         let seeded = segments.map { segment -> TranscriptSegment in
             var copy = segment
-            if let id = copy.speakerId, let name = overrides[id] { copy.speakerName = name }
+            if let id = copy.speakerId {
+                if let name = overrides[id] {
+                    copy.speakerName = name
+                } else if let currentName = copy.speakerName, allThemeNicknames.contains(currentName) || currentName.hasPrefix("角色 ") {
+                    copy.speakerName = nil
+                }
+            }
             return copy
         }
         return ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
             segments: seeded, theme: recording.speakerNicknameTheme ?? .strangerThings,
             userVoiceProfile: preferences.userVoiceProfile)
+    }
+
+    public func reapplySpeakerDiarizationAndNicknames(for recordingId: UUID) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingId }),
+              let segs = segmentsByRecording[recordingId] else { return }
+        let resolved = resolveSpeakerNames(segs, recording: recordings[index])
+        segmentsByRecording[recordingId] = resolved
+        saveToDisk()
     }
 
     /// 用户手动纠正某条录音中的说话人归属/自定义昵称
