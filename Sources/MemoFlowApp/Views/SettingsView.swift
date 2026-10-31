@@ -456,6 +456,10 @@ public struct SettingsView: View {
     }
     #endif
 
+    private var isEnglish: Bool {
+        store.preferences.appLanguage.isEnglish
+    }
+
     // MARK: - Mac Two-Pane Layout
 
     #if os(macOS)
@@ -469,10 +473,6 @@ public struct SettingsView: View {
             destinationView(for: selectedDestination)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private var isEnglish: Bool {
-        store.preferences.appLanguage.isEnglish
     }
 
     private var macSidebarView: some View {
