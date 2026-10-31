@@ -174,6 +174,10 @@ public final class MemoFlowStore: ObservableObject {
                 self?.enqueueLiveChunk(item, url: url)
             }
         }
+
+        WatchSyncService.shared.configureImportHandler { [weak self] tempURL, metadata in
+            _ = try await self?.importWatchRecording(audioFileURL: tempURL, metadata: metadata)
+        }
     }
 
     // MARK: - Cross-Recording Unified Review Queue Queries (PRD R24 & P05)
@@ -263,6 +267,233 @@ public final class MemoFlowStore: ObservableObject {
             }
             return nil
         }
+    }
+
+    // MARK: - CHAT-001: AI 记忆助手与 Obsidian 智能归档 (PRD V1.4)
+
+    /// CHAT-001B: 跨日期全局检索与录音候选（不受当前单日或热力图限制）
+    public func findProjectNoteCandidates(query: String) -> [ProjectCandidateRecording] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allRecordings = recordings
+
+        // 提取主要停用词后的核心搜索词
+        let stopWords = [
+            "把", "所有", "和", "有关的录音", "关于", "整理成", "整理", "一篇", "项目笔记",
+            "按时间线", "归纳讨论", "决策和待办", "再放进", "放进", "Obsidian", "请", "帮我",
+            "相关", "的", "最近一个月", "最近", "这段时间", "所有的", "讨论"
+        ]
+        var searchTerms: [String] = []
+        var cleanedQuery = trimmed
+        for sw in stopWords {
+            cleanedQuery = cleanedQuery.replacingOccurrences(of: sw, with: " ")
+        }
+        let extracted = cleanedQuery.components(separatedBy: .whitespacesAndNewlines).filter { $0.count >= 2 }
+        if !extracted.isEmpty {
+            searchTerms = extracted
+        }
+        if !trimmed.isEmpty && !searchTerms.contains(trimmed) {
+            searchTerms.append(trimmed)
+        }
+
+        return allRecordings.compactMap { rec -> ProjectCandidateRecording? in
+            let segs = segmentsByRecording[rec.id] ?? []
+            let rev = currentRevision(for: rec.id)
+            let acts = actionDraftsByRecording[rec.id] ?? []
+            let marks = rec.marks ?? []
+
+            var matchedSnippets: [String] = []
+            var reasons: [String] = []
+
+            for term in searchTerms {
+                if rec.title.localizedCaseInsensitiveContains(term) {
+                    reasons.append("标题包含「\(term)」")
+                }
+
+                if let summary = rev?.content.summaryOrShortNote, summary.localizedCaseInsensitiveContains(term) {
+                    reasons.append("AI 核心摘要提及")
+                    matchedSnippets.append("摘要：\(summary)")
+                }
+
+                for mark in marks where mark.quote.localizedCaseInsensitiveContains(term) || mark.note.localizedCaseInsensitiveContains(term) {
+                    reasons.append("重点书签命中")
+                    matchedSnippets.append("书签：\(mark.quote)")
+                }
+
+                for seg in segs where seg.text.localizedCaseInsensitiveContains(term) {
+                    let spk = seg.speakerName.map { "\($0): " } ?? ""
+                    let snip = "[\(seg.formattedStartTime)] \(spk)\(seg.text)"
+                    if !matchedSnippets.contains(snip) {
+                        matchedSnippets.append(snip)
+                    }
+                }
+
+                for act in acts where act.description.localizedCaseInsensitiveContains(term) {
+                    matchedSnippets.append("待办：\(act.description)")
+                }
+            }
+
+            // 如果用户未输入具体关键词，列出全部录音供勾选整理
+            let isMatch = trimmed.isEmpty || !reasons.isEmpty || !matchedSnippets.isEmpty
+            guard isMatch else { return nil }
+
+            let reasonStr = reasons.isEmpty ? "全部历史录音候选" : Array(Set(reasons)).joined(separator: " · ")
+
+            var warning: String?
+            if rec.processingStatus == .transcriptNeedsReview || rec.isTranscriptReviewed != true {
+                warning = "机器初稿尚未人工校对"
+            }
+            if rec.processingStatus == .savedPendingTranscription || rec.processingStatus == .uploading || rec.processingStatus == .transcribing {
+                warning = "转写处理中，请稍后查看完整内容"
+            }
+            if rec.processingStatus == .failed {
+                warning = "转写失败，仅原音频已安全保存"
+            }
+
+            return ProjectCandidateRecording(
+                recording: rec,
+                matchReason: reasonStr,
+                matchingSnippets: Array(matchedSnippets.prefix(4)),
+                isSelected: true,
+                transcriptWarning: warning
+            )
+        }
+    }
+
+    /// CHAT-001C/D: 根据选中的录音汇总提炼结构化项目笔记 Markdown
+    public func synthesizeProjectNote(topic: String, selectedRecordingIds: [UUID]) async throws -> String {
+        let selectedRecordings = recordings.filter { selectedRecordingIds.contains($0.id) }
+            .sorted { $0.createdAt < $1.createdAt }
+
+        guard !selectedRecordings.isEmpty else {
+            throw NSError(domain: "MemoFlow", code: 400, userInfo: [NSLocalizedDescriptionKey: "请至少选择一条录音进行整理"])
+        }
+
+        let recordingsData = selectedRecordings.map { rec in
+            let segs = segmentsByRecording[rec.id] ?? []
+            let rev = currentRevision(for: rec.id)
+            let acts = actionDraftsByRecording[rec.id] ?? []
+            return (recording: rec, segments: segs, note: rev, actions: acts)
+        }
+
+        let key = KeychainService.shared.readKey(for: .llmAPIKey, endpoint: preferences.llmBaseURL) ?? ""
+        let canCallLLM = !key.isEmpty && !preferences.llmModelName.isEmpty
+
+        if canCallLLM {
+            do {
+                return try await ASRAndLLMService.shared.synthesizeProjectNoteWithLLM(
+                    topic: topic,
+                    recordingsData: recordingsData,
+                    preferences: preferences,
+                    apiKey: key
+                )
+            } catch {
+                // LLM 遇网络波动或额度异常时平滑降级到离线规则提取，保证可用性
+                return ASRAndLLMService.shared.synthesizeProjectNoteLocally(
+                    topic: topic,
+                    recordingsData: recordingsData
+                )
+            }
+        } else {
+            return ASRAndLLMService.shared.synthesizeProjectNoteLocally(
+                topic: topic,
+                recordingsData: recordingsData
+            )
+        }
+    }
+
+    /// CHAT-001E: 预览确认后安全新建 Obsidian Markdown 笔记（绝不覆盖已有笔记）
+    @discardableResult
+    public func exportProjectNoteToObsidian(
+        title: String,
+        markdown: String,
+        sourceRecordingIds: [UUID]
+    ) throws -> (fileURL: URL, relativePath: String, obsidianOpenURL: URL?) {
+        let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+
+        let fm = FileManager.default
+        let subfolder = preferences.obsidianTargetSubfolder.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetDirectoryURL = subfolder.isEmpty ? root : root.appendingPathComponent(subfolder)
+
+        if !fm.fileExists(atPath: targetDirectoryURL.path) {
+            try fm.createDirectory(at: targetDirectoryURL, withIntermediateDirectories: true)
+        }
+
+        // 默认新建笔记，不覆盖已有笔记；文件名冲突时自动采用非覆盖安全名称（_1.md 等）
+        let safeBaseTitle = MarkdownExporterService.safeFileTitle(title)
+        var fileName = "\(safeBaseTitle).md"
+        var candidateURL = targetDirectoryURL.appendingPathComponent(fileName)
+        var counter = 1
+
+        while fm.fileExists(atPath: candidateURL.path) {
+            fileName = "\(safeBaseTitle)_\(counter).md"
+            candidateURL = targetDirectoryURL.appendingPathComponent(fileName)
+            counter += 1
+        }
+
+        guard let data = markdown.data(using: .utf8) else {
+            throw ObsidianSyncError.fileOperationFailed("无法编码 Markdown 文本")
+        }
+
+        try data.write(to: candidateURL, options: .atomic)
+
+        let relativePath = subfolder.isEmpty ? fileName : "\(subfolder)/\(fileName)"
+        let openURL = MarkdownExporterService.obsidianOpenURL(vaultRootURL: root, relativePath: relativePath)
+
+        lastBannerFeedback = preferences.appLanguage.isEnglish
+            ? "Successfully created Obsidian note: \(fileName)"
+            : "已成功新建 Obsidian 项目笔记：\(fileName)"
+
+        return (candidateURL, relativePath, openURL)
+    }
+
+    // MARK: - WATCH-001: Apple Watch 独立录音导入与同步
+
+    /// WATCH-001-03: 将 Apple Watch 传输的录音安全保存到本地，并进入转写整理链路
+    @discardableResult
+    public func importWatchRecording(audioFileURL: URL, metadata: [String: Any]) async throws -> Recording {
+        let recordingId = (metadata["recordingId"] as? String).flatMap(UUID.init) ?? UUID()
+        let duration = metadata["duration"] as? TimeInterval ?? 0
+        let recordedAt = (metadata["createdAt"] as? TimeInterval).map { Date(timeIntervalSince1970: $0) } ?? Date()
+        let customTitle = metadata["title"] as? String
+
+        let isEn = preferences.appLanguage.isEnglish
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        let fallbackTitle = "\(isEn ? "Watch Recording" : "Apple Watch 录音") \(formatter.string(from: recordedAt))"
+        let finalTitle = (customTitle?.isEmpty == false) ? customTitle! : fallbackTitle
+
+        let targetFileName = "watch_\(recordingId.uuidString).m4a"
+        let destinationURL = audioService.recordingsDirectoryURL.appendingPathComponent(targetFileName)
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destinationURL.path) {
+            try? fm.removeItem(at: destinationURL)
+        }
+        try fm.copyItem(at: audioFileURL, to: destinationURL)
+
+        let newRecording = Recording(
+            id: recordingId,
+            title: finalTitle,
+            createdAt: recordedAt,
+            recordedTimeZoneIdentifier: TimeZone.current.identifier,
+            duration: duration,
+            localAudioFileName: targetFileName,
+            language: preferences.appLanguage.appleLocaleIdentifier,
+            processingStatus: .savedPendingTranscription,
+            deviceSource: .appleWatch
+        )
+
+        recordings.insert(newRecording, at: 0)
+        lastBannerFeedback = isEn ? "Apple Watch audio imported successfully" : "已成功导入 Apple Watch 录音"
+        _ = saveToDisk()
+
+        Task {
+            await self.runProcessingPipeline(for: recordingId, mode: self.preferences.defaultNoteMode)
+        }
+
+        return newRecording
     }
 
     /// 统计指定日期 00:00 - 24:00 各小时区间的录音活动（秒数与次数，用于 24 小时热力图）

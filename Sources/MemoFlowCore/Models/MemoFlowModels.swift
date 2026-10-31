@@ -98,6 +98,26 @@ public enum ActionKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// WATCH-001: 录音设备来源（PRD V1.4: iPhone/Mac 本机 或 Apple Watch 独立录音）
+public enum RecordingDeviceSource: String, Codable, CaseIterable, Sendable {
+    case phoneOrMac = "phone_or_mac"
+    case appleWatch = "apple_watch"
+
+    public var displayTitle: String {
+        switch self {
+        case .phoneOrMac: return "本机"
+        case .appleWatch: return "Apple Watch"
+        }
+    }
+
+    public func localizedTitle(isEnglish: Bool) -> String {
+        switch self {
+        case .phoneOrMac: return isEnglish ? "This Device" : "本机"
+        case .appleWatch: return "Apple Watch"
+        }
+    }
+}
+
 /// 行动归属（PRD 8.3 & 4.6: 本人 / 他人 / 不确定）
 public enum ActionOwnership: String, Codable, CaseIterable, Sendable {
     case selfOwner = "self"
@@ -279,6 +299,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
     public var isTranscriptReviewed: Bool?
     /// P2-7：可选保存在 Obsidian 笔记库附件目录中的相对路径（如 "MemoFlow笔记/Attachments/rec_<UUID>.m4a"，严禁写入仅 Mac 有效的绝对路径）
     public var vaultAudioRelativePath: String?
+    /// WATCH-001：录音设备来源（iPhone/Mac 本机 或 Apple Watch 独立录音）
+    public var deviceSource: RecordingDeviceSource?
 
     public init(
         id: UUID = UUID(),
@@ -292,7 +314,8 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         failureReason: String? = nil,
         audioInterruptionNote: String? = nil,
         isTranscriptReviewed: Bool? = nil,
-        vaultAudioRelativePath: String? = nil
+        vaultAudioRelativePath: String? = nil,
+        deviceSource: RecordingDeviceSource? = .phoneOrMac
     ) {
         self.id = id
         self.title = title
@@ -306,6 +329,11 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
         self.audioInterruptionNote = audioInterruptionNote
         self.isTranscriptReviewed = isTranscriptReviewed
         self.vaultAudioRelativePath = vaultAudioRelativePath
+        self.deviceSource = deviceSource
+    }
+
+    public var isFromAppleWatch: Bool {
+        deviceSource == .appleWatch
     }
 
     public var recordedTimeZone: TimeZone {
@@ -1750,5 +1778,63 @@ public enum TimeFormatting {
 
     public static func formatDuration(_ duration: TimeInterval) -> String {
         formatMilliseconds(Int(duration * 1000))
+    }
+}
+
+// MARK: - CHAT-001: AI Memory Project Synthesizer & Obsidian Archiving
+
+/// CHAT-001: 跨录音候选检索条目
+public struct ProjectCandidateRecording: Identifiable, Sendable {
+    public var id: UUID { recording.id }
+    public var recording: Recording
+    public var matchReason: String
+    public var matchingSnippets: [String]
+    public var isSelected: Bool
+    public var transcriptWarning: String?
+
+    public init(
+        recording: Recording,
+        matchReason: String,
+        matchingSnippets: [String] = [],
+        isSelected: Bool = true,
+        transcriptWarning: String? = nil
+    ) {
+        self.recording = recording
+        self.matchReason = matchReason
+        self.matchingSnippets = matchingSnippets
+        self.isSelected = isSelected
+        self.transcriptWarning = transcriptWarning
+    }
+}
+
+/// CHAT-001: 结构化项目笔记草稿
+public struct ProjectNoteDraft: Identifiable, Codable, Sendable {
+    public var id: UUID
+    public var topic: String
+    public var title: String
+    public var selectedRecordingIds: [UUID]
+    public var markdownContent: String
+    public var generatedAt: Date
+    public var exportedAt: Date?
+    public var obsidianRelativePath: String?
+
+    public init(
+        id: UUID = UUID(),
+        topic: String,
+        title: String,
+        selectedRecordingIds: [UUID],
+        markdownContent: String,
+        generatedAt: Date = Date(),
+        exportedAt: Date? = nil,
+        obsidianRelativePath: String? = nil
+    ) {
+        self.id = id
+        self.topic = topic
+        self.title = title
+        self.selectedRecordingIds = selectedRecordingIds
+        self.markdownContent = markdownContent
+        self.generatedAt = generatedAt
+        self.exportedAt = exportedAt
+        self.obsidianRelativePath = obsidianRelativePath
     }
 }

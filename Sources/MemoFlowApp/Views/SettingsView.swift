@@ -275,6 +275,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
     case appearance = "appearance"
     case language = "language"
     case privacy = "privacy"
+    case about = "about"
 
     public var id: String { rawValue }
 
@@ -290,6 +291,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return L10n.appearance(isEnglish)
         case .language: return L10n.language(isEnglish)
         case .privacy: return L10n.privacyAndData(isEnglish)
+        case .about: return L10n.aboutMemoFlow(isEnglish)
         }
     }
 
@@ -309,6 +311,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "moon"
         case .language: return "globe"
         case .privacy: return "hand.raised.fill"
+        case .about: return "info.circle"
         }
     }
 
@@ -318,7 +321,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
             return L10n.recordingAndNotesGroup(isEnglish)
         case .obsidian, .memory, .calendar:
             return L10n.knowledgeAndSyncGroup(isEnglish)
-        case .appearance, .language, .privacy:
+        case .appearance, .language, .privacy, .about:
             return L10n.preferencesGroup(isEnglish)
         }
     }
@@ -339,6 +342,7 @@ public enum SettingsDestination: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return MFTheme.iceCyan
         case .language: return MFTheme.mintGreen
         case .privacy: return MFTheme.coralRed
+        case .about: return MFTheme.textSecondary
         }
     }
 }
@@ -495,7 +499,7 @@ public struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     macSidebarGroup(title: L10n.recordingAndNotesGroup(isEnglish), destinations: [.asr, .llm, .liveStreaming, .speaker])
                     macSidebarGroup(title: L10n.knowledgeAndSyncGroup(isEnglish), destinations: [.obsidian, .memory, .calendar])
-                    macSidebarGroup(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy])
+                    macSidebarGroup(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy, .about])
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 12)
@@ -710,7 +714,7 @@ public struct SettingsView: View {
                 iosGroupCard(title: L10n.knowledgeAndSyncGroup(isEnglish), destinations: [.obsidian, .memory, .calendar])
 
                 // 3. 偏好与管理
-                iosGroupCard(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy])
+                iosGroupCard(title: L10n.preferencesGroup(isEnglish), destinations: [.appearance, .language, .privacy, .about])
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
@@ -1041,6 +1045,8 @@ public struct SettingsView: View {
         case .privacy:
             let isConsented = store.processingConsent.grantedAt != nil && store.processingConsent.revokedAt == nil
             return isConsented ? L10n.cloudAuthorized(isEnglish) : L10n.onDeviceOnly(isEnglish)
+        case .about:
+            return "V1.4"
         }
     }
 
@@ -1065,6 +1071,7 @@ public struct SettingsView: View {
                 case .appearance: appearanceSubpageContent
                 case .language: languageSubpageContent
                 case .privacy: privacySubpageContent
+                case .about: aboutSubpageContent
                 }
             }
             .padding(18)
@@ -1797,10 +1804,88 @@ public struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            // WATCH-001: Apple Watch 录音同步卡片
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "applewatch")
+                        .font(.system(size: 14))
+                        .foregroundStyle(MFTheme.softViolet)
+                    Text(L10n.appleWatchSync(isEnglish))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Spacer()
+                    MFBadgePill(
+                        isEnglish ? "Supported" : "已就绪",
+                        color: MFTheme.mintGreen,
+                        icon: "checkmark.circle.fill"
+                    )
+                }
+
+                Text(isEnglish
+                     ? "MemoFlow supports standalone recording on Apple Watch. Audio files are automatically transferred via WatchConnectivity when connected to your iPhone, preserving original audio and running through AI transcription."
+                     : "MemoFlow 支持在 Apple Watch 上独立录音并安全落盘；连接 iPhone 后通过 WatchConnectivity 自动传输，完整保留原始音频并进入 AI 转写与知识库归档流程。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MFTheme.textSecondary)
+            }
+            .padding(.top, 6)
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
         .onAppear {
             refreshContainers()
+        }
+    }
+
+    // MARK: - About Subpage Content
+
+    private var aboutSubpageContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                MemoFlowWaveformBrandIcon(size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MemoFlow")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(MFTheme.textPrimary)
+                    Text(isEnglish ? "Version 1.4 (Build 2026.10)" : "版本 1.4 (构建 2026.10)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(MFTheme.recessedBg)
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MFTheme.paperBorder, lineWidth: 0.8))
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(isEnglish ? "Product Philosophy & Principles" : "产品定位与核心原则")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                Text(isEnglish
+                     ? "MemoFlow is an offline-first voice recording and memory synthesis system. It connects seamlessly with your personal Obsidian vault, providing sample-accurate transcripts, non-destructive smart project notes, and strict fact grounding."
+                     : "MemoFlow 是一款离线优先的口述录音与记忆整理系统。支持毫秒级时间戳对齐、跨录音脉络归纳、受控 Obsidian 双向同步，并严格遵循事实边界，绝不捏造未发生的事项。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(MFTheme.textPrimary)
+            }
+            .mfGlassCard(cornerRadius: 14, padding: 14)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(isEnglish ? "Safety & Data Sovereignty" : "数据安全与隐私守则")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MFTheme.textSecondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(isEnglish ? "Original audio is always safely preserved on-device" : "原始录音始终安全落盘于设备本地，网络失败不丢音频", systemImage: "shield.fill")
+                    Label(isEnglish ? "Strict non-destructive Obsidian sync; never silently overwrites" : "Obsidian 导出严格执行非覆盖新建保护，绝不静默覆盖", systemImage: "book.closed.fill")
+                    Label(isEnglish ? "Keychain encrypted storage for all API credentials" : "API 密钥安全存储于系统 Keychain，禁止明文暴露", systemImage: "key.fill")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(MFTheme.textSecondary)
+            }
+            .mfGlassCard(cornerRadius: 14, padding: 14, tint: MFTheme.mintGreen)
         }
     }
 

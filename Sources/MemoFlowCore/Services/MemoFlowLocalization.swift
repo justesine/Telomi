@@ -87,4 +87,14 @@ public enum L10n {
     public static func save(_ isEnglish: Bool) -> String { tr(isEnglish, "保存", "Save") }
     public static func delete(_ isEnglish: Bool) -> String { tr(isEnglish, "删除", "Delete") }
     public static func edit(_ isEnglish: Bool) -> String { tr(isEnglish, "编辑", "Edit") }
+
+    // MARK: - CHAT-001 & WATCH-001
+    public static func aiMemoryAssistant(_ isEnglish: Bool) -> String { tr(isEnglish, "AI 记忆助手", "AI Memory Assistant") }
+    public static func askMemoryPlaceholder(_ isEnglish: Bool) -> String { tr(isEnglish, "你说，我做（跨录音整理项目笔记…）", "You speak, I organize (Synthesize notes…)") }
+    public static func generateProjectNote(_ isEnglish: Bool) -> String { tr(isEnglish, "生成项目笔记", "Generate Project Note") }
+    public static func confirmWriteObsidian(_ isEnglish: Bool) -> String { tr(isEnglish, "确认写入 Obsidian", "Confirm Write to Obsidian") }
+    public static func appleWatch(_ isEnglish: Bool) -> String { "Apple Watch" }
+    public static func appleWatchSync(_ isEnglish: Bool) -> String { tr(isEnglish, "Apple Watch 同步", "Apple Watch Sync") }
+    public static func aboutGroup(_ isEnglish: Bool) -> String { tr(isEnglish, "关于", "About") }
+    public static func aboutMemoFlow(_ isEnglish: Bool) -> String { tr(isEnglish, "关于 MemoFlow", "About MemoFlow") }
 }

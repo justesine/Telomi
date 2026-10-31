@@ -1762,4 +1762,256 @@ public final class ASRAndLLMService: Sendable {
             return Array(prioritized.prefix(40))
         }
     }
+
+    // MARK: - CHAT-001: 跨录音结构化项目笔记生成
+
+    public func synthesizeProjectNoteWithLLM(
+        topic: String,
+        recordingsData: [(recording: Recording, segments: [TranscriptSegment], note: NoteRevision?, actions: [ActionDraft])],
+        preferences: MemoFlowPreferences,
+        apiKey: String
+    ) async throws -> String {
+        let endpoint = try Self.endpoint(baseURL: preferences.llmBaseURL, path: "chat/completions")
+        guard !preferences.llmModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ProcessingPipelineError.networkFailure("请在设置中填写当前 LLM 的模型或接入点 ID")
+        }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let todayStr = dateFormatter.string(from: Date())
+
+        var recordingsContext: [String] = []
+        for (rec, segs, rev, acts) in recordingsData {
+            let recDate = dateFormatter.string(from: rec.createdAt)
+            var parts: [String] = [
+                "### 录音：\(rec.title) (ID: \(rec.id.uuidString.prefix(8)), 日期: \(recDate), 时长: \(TimeFormatting.formatDuration(rec.duration)))"
+            ]
+            if let content = rev?.content {
+                if !content.summaryOrShortNote.isEmpty {
+                    parts.append("【AI 摘要】：\(content.summaryOrShortNote)")
+                }
+                if !content.backgroundPoints.isEmpty {
+                    parts.append("【背景】：\(content.backgroundPoints.joined(separator: "; "))")
+                }
+                if !content.keyPoints.isEmpty {
+                    parts.append("【关键观点】：\(content.keyPoints.joined(separator: "; "))")
+                }
+                if !content.decisions.isEmpty {
+                    parts.append("【已确认决策】：\(content.decisions.joined(separator: "; "))")
+                }
+            }
+            if !acts.isEmpty {
+                let actSummaries = acts.map { act in
+                    "[\(act.kind == .task ? "待办" : "日程")] \(act.description) (负责人: \(act.owner ?? "待确认"), 时间: \(act.originalDateText ?? "待确认"))"
+                }
+                parts.append("【提取事项】：\(actSummaries.joined(separator: "; "))")
+            }
+            if !segs.isEmpty {
+                let transcriptLines = segs.prefix(60).map { seg in
+                    "[\(seg.formattedStartTime)] \(seg.speakerName.map { "\($0): " } ?? "")\(seg.text)"
+                }.joined(separator: "\n")
+                parts.append("【逐字稿片段】：\n\(transcriptLines)")
+            }
+            recordingsContext.append(parts.joined(separator: "\n"))
+        }
+
+        let combinedContext = recordingsContext.joined(separator: "\n\n---\n\n")
+
+        let systemPrompt = """
+        你是 MemoFlow 的高级记忆整合专家。你的任务是根据用户选中的历史录音资料，围绕用户指定的主题「\(topic)」，提炼整合出一篇高度结构化、客观可核验的项目 Markdown 笔记。
+
+        【必须严格遵守的铁律】：
+        1. 绝不虚构任何事实、结论、负责人或截止时间。如果录音中没有提到某事项的负责人或截止日期，必须标注「待确认」。
+        2. 讨论时间线与关键决定必须标注来源录音名称及时间戳，格式严格为：（来源：录音名称，MM:SS）。
+        3. 对同一主题的重复讨论做脉络整合与归纳，但不能丢失关键出处。
+        4. 严格输出符合以下 Markdown 模板，最外层包含 YAML Frontmatter，不要使用任何多余的开场白或寒暄：
+
+        ---
+        title: \(topic)｜项目讨论整理
+        source: MemoFlow
+        generated_at: \(todayStr)
+        ---
+
+        # \(topic)｜项目讨论整理
+
+        ## 一、项目背景
+        （来自选中录音的事实性归纳）
+
+        ## 二、讨论时间线
+        - YYYY-MM-DD：……（来源：录音名称，MM:SS）
+
+        ## 三、关键决定
+        - ……（来源：录音名称，MM:SS）
+
+        ## 四、待办事项
+        - [ ] ……（负责人／截止时间不明确时标注“待确认”）
+
+        ## 五、待确认问题
+        - ……
+
+        ## 六、来源录音
+        - 录音名称｜日期｜录音 ID｜关联时间戳
+        """
+
+        let userPrompt = """
+        用户整理主题：\(topic)
+
+        以下是选中的录音资料：
+        \(combinedContext)
+
+        请直接输出最终 Markdown 内容：
+        """
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty {
+            request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.timeoutInterval = 60
+
+        let body: [String: Any] = [
+            "model": preferences.llmModelName,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userPrompt]
+            ],
+            "temperature": 0.2
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ProcessingPipelineError.networkFailure("无法解析 LLM 响应")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let errBody = String(data: data, encoding: .utf8) ?? ""
+            throw ProcessingPipelineError.invalidServerResponse(http.statusCode, errBody)
+        }
+
+        struct ChatCompletionResponseEnvelope: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let content: String?
+                }
+                let message: Message
+            }
+            let choices: [Choice]
+        }
+        let env = try JSONDecoder().decode(ChatCompletionResponseEnvelope.self, from: data)
+        guard let rawMarkdown = env.choices.first?.message.content else {
+            throw ProcessingPipelineError.invalidServerResponse(200, "LLM 返回内容为空")
+        }
+        return rawMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public func synthesizeProjectNoteLocally(
+        topic: String,
+        recordingsData: [(recording: Recording, segments: [TranscriptSegment], note: NoteRevision?, actions: [ActionDraft])]
+    ) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let todayStr = dateFormatter.string(from: Date())
+
+        let cleanTopic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noteTitle = cleanTopic.isEmpty ? "项目讨论整理" : "\(cleanTopic)｜项目讨论整理"
+
+        // 1. 背景归纳
+        var backgroundLines: [String] = []
+        for (_, _, rev, _) in recordingsData {
+            if let bg = rev?.content.backgroundPoints, !bg.isEmpty {
+                backgroundLines.append(contentsOf: bg)
+            } else if let summary = rev?.content.summaryOrShortNote, !summary.isEmpty {
+                backgroundLines.append(summary)
+            }
+        }
+        let backgroundText = backgroundLines.isEmpty
+            ? "基于选中的 \(recordingsData.count) 条历史录音汇总整理，涵盖项目核心讨论脉络、已确认决策与待推进事项。"
+            : backgroundLines.prefix(4).map { "- \($0)" }.joined(separator: "\n")
+
+        // 2. 讨论时间线
+        var timelineLines: [String] = []
+        for (rec, segs, rev, _) in recordingsData {
+            let recDate = dateFormatter.string(from: rec.createdAt)
+            if let chapters = rev?.content.chapters, !chapters.isEmpty {
+                for ch in chapters {
+                    let time = TimeFormatting.formatMilliseconds(ch.startMs)
+                    timelineLines.append("- \(recDate)：\(ch.title) - \(ch.summary)（来源：\(rec.title)，\(time)）")
+                }
+            } else if let firstSeg = segs.first {
+                timelineLines.append("- \(recDate)：\(firstSeg.text.prefix(40))…（来源：\(rec.title)，\(firstSeg.formattedStartTime)）")
+            } else {
+                timelineLines.append("- \(recDate)：完成录音《\(rec.title)》（来源：\(rec.title)，00:00）")
+            }
+        }
+
+        // 3. 关键决定
+        var decisionLines: [String] = []
+        for (rec, segs, rev, _) in recordingsData {
+            if let decs = rev?.content.decisions, !decs.isEmpty {
+                for d in decs {
+                    let time = segs.first?.formattedStartTime ?? "00:00"
+                    decisionLines.append("- \(d)（来源：\(rec.title)，\(time)）")
+                }
+            }
+        }
+        if decisionLines.isEmpty {
+            decisionLines.append("- 讨论中暂无明确记录的决策结论（以各录音逐字稿为准）")
+        }
+
+        // 4. 待办事项
+        var taskLines: [String] = []
+        for (_, _, _, acts) in recordingsData {
+            for act in acts {
+                let ownerStr = (act.owner?.isEmpty == false) ? act.owner! : "待确认"
+                let dateStr = (act.originalDateText?.isEmpty == false) ? act.originalDateText! : "待确认"
+                taskLines.append("- [ ] \(act.description)（负责人：\(ownerStr)，截止：\(dateStr)）")
+            }
+        }
+        if taskLines.isEmpty {
+            taskLines.append("- [ ] 落实并核对本次整理确认的事项（负责人：待确认，截止：待确认）")
+        }
+
+        // 5. 待确认问题
+        let openQuestions: [String] = [
+            "- 后续跟进会议时间与具体议程安排（待确认）"
+        ]
+
+        // 6. 来源录音
+        var sourceLines: [String] = []
+        for (rec, segs, _, _) in recordingsData {
+            let recDate = dateFormatter.string(from: rec.createdAt)
+            let timeStr = segs.first.map { "\($0.formattedStartTime) - \(TimeFormatting.formatMilliseconds($0.endMs))" } ?? TimeFormatting.formatDuration(rec.duration)
+            sourceLines.append("- \(rec.title)｜\(recDate)｜`\(rec.id.uuidString.prefix(8))`｜\(timeStr)")
+        }
+
+        return """
+        ---
+        title: \(noteTitle)
+        source: MemoFlow
+        generated_at: \(todayStr)
+        ---
+
+        # \(noteTitle)
+
+        ## 一、项目背景
+        \(backgroundText)
+
+        ## 二、讨论时间线
+        \(timelineLines.joined(separator: "\n"))
+
+        ## 三、关键决定
+        \(decisionLines.joined(separator: "\n"))
+
+        ## 四、待办事项
+        \(taskLines.joined(separator: "\n"))
+
+        ## 五、待确认问题
+        \(openQuestions.joined(separator: "\n"))
+
+        ## 六、来源录音
+        \(sourceLines.joined(separator: "\n"))
+        """
+    }
 }

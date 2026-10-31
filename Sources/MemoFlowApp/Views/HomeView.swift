@@ -20,6 +20,7 @@ public struct HomeView: View {
     @State private var showingUnifiedReview: Bool = false
     @State private var showingSettings: Bool = false
     @State private var showingGroundedQA: Bool = false
+    @State private var showingAIMemoryChat: Bool = false
     @State private var recordingPendingDeletion: Recording?
 
     public init(store: MemoFlowStore) {
@@ -166,6 +167,12 @@ public struct HomeView: View {
                 .frame(minWidth: 520, idealWidth: 560, minHeight: 620, idealHeight: 680)
                 #endif
             }
+            .sheet(isPresented: $showingAIMemoryChat) {
+                AIMemoryChatSheetView(store: store)
+                #if os(macOS)
+                .frame(minWidth: 560, idealWidth: 640, minHeight: 580, idealHeight: 680)
+                #endif
+            }
             .navigationDestination(item: $store.activeDeepLinkRequest) { req in
                 RecordingDetailView(
                     store: store,
@@ -294,7 +301,7 @@ public struct HomeView: View {
                     }
 
                     Button {
-                        showingGroundedQA = true
+                        showingAIMemoryChat = true
                     } label: {
                         Image(systemName: "books.vertical")
                             .font(.system(size: 14, weight: .semibold))
@@ -309,7 +316,7 @@ public struct HomeView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help(L10n.groundedQATooltip(isEnglish))
+                    .help(isEnglish ? "AI Memory & Project Note Assistant" : "AI 记忆助手 · 跨录音整理")
                 }
             }
         }
@@ -787,15 +794,44 @@ public struct HomeView: View {
     // MARK: - Floating Dock & Luminous Start Button
 
     private var bottomStartRecordingBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             dockModeSelector
+            aiMemoryAssistantCapsuleButton
             luminousStartButton
         }
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .background(dockContainerBackground)
         .padding(.bottom, 16)
+    }
+
+    private var aiMemoryAssistantCapsuleButton: some View {
+        Button {
+            showingAIMemoryChat = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MFTheme.iceCyan)
+                Text(L10n.askMemoryPlaceholder(isEnglish))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MFTheme.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule()
+                    .fill(MFTheme.recessedBg)
+                    .overlay(
+                        Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(L10n.aiMemoryAssistant(isEnglish))
     }
 
     private var dockModeSelector: some View {
@@ -920,13 +956,21 @@ private struct RecordingRowCard: View {
         let counts = store.pendingCounts(for: rec.id)
 
         VStack(alignment: .leading, spacing: 11) {
-            // 第一行：整理模式胶囊 + 项目标签 + 处理状态胶囊
+            // 第一行：整理模式胶囊 + 设备来源 + 项目标签 + 处理状态胶囊
             HStack(spacing: 8) {
                 if let mode = note?.mode {
                     MFBadgePill(
                         mode.localizedTitle(isEnglish: isEnglish),
                         color: mode == .quickNote ? MFTheme.iceBlue : MFTheme.softViolet,
                         icon: mode == .quickNote ? "bolt.fill" : "person.2.wave.2.fill"
+                    )
+                }
+
+                if rec.deviceSource == .appleWatch {
+                    MFBadgePill(
+                        "Apple Watch",
+                        color: MFTheme.softViolet,
+                        icon: "applewatch"
                     )
                 }
 
