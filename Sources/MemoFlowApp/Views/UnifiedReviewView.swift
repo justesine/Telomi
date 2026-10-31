@@ -27,6 +27,14 @@ public struct UnifiedReviewView: View {
             case .eventsOnly: return isEnglish ? "Events Only" : "仅日程活动"
             }
         }
+
+        public var iconName: String {
+            switch self {
+            case .all: return "line.3.horizontal.decrease"
+            case .tasksOnly: return "checkmark.circle"
+            case .eventsOnly: return "calendar"
+            }
+        }
     }
 
     public init(store: MemoFlowStore) {
@@ -98,31 +106,42 @@ public struct UnifiedReviewView: View {
 
     private var topFilterControlBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                ForEach(KindFilter.allCases, id: \.self) { f in
-                    let isSel = (selectedFilter == f)
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            selectedFilter = f
-                        }
-                    } label: {
-                        Text(f.localizedTitle(isEnglish: isEnglish))
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(isSel ? Color.white : MFTheme.textSecondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(isSel ? MFTheme.iceBlue.opacity(0.28) : Color.white.opacity(0.05))
-                                    .overlay(
-                                        Capsule()
-                                            .strokeBorder(isSel ? MFTheme.iceBlue.opacity(0.55) : Color.white.opacity(0.08), lineWidth: 0.8)
-                                    )
-                            )
+            Menu {
+                Picker(selection: $selectedFilter) {
+                    ForEach(KindFilter.allCases, id: \.self) { f in
+                        Label(f.localizedTitle(isEnglish: isEnglish), systemImage: f.iconName)
+                            .tag(f)
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    EmptyView()
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: selectedFilter.iconName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(selectedFilter == .all ? MFTheme.textSecondary : MFTheme.iceCyan)
+
+                    Text(selectedFilter.localizedTitle(isEnglish: isEnglish))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(MFTheme.textPrimary)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(MFTheme.textSecondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.07))
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)
+                        )
+                )
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
 
             Spacer()
 
