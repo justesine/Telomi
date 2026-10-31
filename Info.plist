@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>MemoFlow</string>
+	<string>Telomi</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconFile</key>
@@ -25,15 +25,15 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>MemoFlow 需要使用麦克风录制你的口述灵感与会议音频，音频将优先安全保存在本地设备。</string>
+	<string>Telomi 需要使用麦克风录制你的口述灵感与会议音频，音频将优先安全保存在本地设备。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>当你选择端侧本地语音识别模式时，MemoFlow 需要使用系统语音识别将录音转为逐字稿。</string>
+	<string>当你选择端侧本地语音识别模式时，Telomi 需要使用系统语音识别将录音转为逐字稿。</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>经你审核确认后，MemoFlow 需要访问日历以将明确时间的会议或活动写入你指定的 Apple 日历。</string>
+	<string>Telomi 需要访问 Apple 日历以在首页呈现你的日程安排，并在你审核确认后写入会议活动。</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
-	<string>经你审核确认后，MemoFlow 需要将明确时间的会议或活动写入你的 Apple 日历。</string>
+	<string>经你审核确认后，Telomi 需要将明确时间的会议或活动写入你的 Apple 日历。</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>经你审核确认后，MemoFlow 需要访问提醒事项以将待办任务写入你指定的 Apple 提醒事项列表。</string>
+	<string>Telomi 需要访问 Apple 提醒事项以在首页呈现你的待办任务，并在你审核确认后写入待办任务列表。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

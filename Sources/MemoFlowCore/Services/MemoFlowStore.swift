@@ -1572,7 +1572,7 @@ public final class MemoFlowStore: ObservableObject {
         var mutableDraft = draft
         mutableDraft.proposedDestination = chosenDestination
 
-        let recTitle = recordings.first(where: { $0.id == draft.recordingId })?.title ?? "MemoFlow 录音"
+        let recTitle = recordings.first(where: { $0.id == draft.recordingId })?.title ?? "Telomi 录音"
         var confirmedList = confirmedActionsByRecording[draft.recordingId] ?? []
 
         // 检查是否已有对应的 ConfirmedAction（稳定 ID 复用，PRD R19 & A16）

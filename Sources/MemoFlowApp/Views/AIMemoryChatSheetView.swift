@@ -303,10 +303,11 @@ public struct AIMemoryChatSheetView: View {
                 .padding(.vertical, 5)
                 .background(MFTheme.recessedBg, in: Capsule())
 
-                // Generate button
+                // Generate button (VIS-002: 尺寸适中、墨黑主操作、禁用与加载反馈清晰)
                 Button {
                     generateProjectDraft()
                 } label: {
+                    let isDisabled = selectedCandidateCount == 0 || isGenerating
                     HStack(spacing: 8) {
                         if isGenerating {
                             ProgressView()
@@ -317,12 +318,13 @@ public struct AIMemoryChatSheetView: View {
                         Text(isGenerating ? (isEnglish ? "Generating…" : "正在生成…") : L10n.generateProjectNote(isEnglish))
                     }
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(MFTheme.textPrimary)
-                    .padding(.horizontal, 20)
+                    .foregroundStyle(isDisabled ? MFTheme.textMuted : MFTheme.canvasBg)
+                    .padding(.horizontal, 24)
                     .padding(.vertical, 12)
+                    .frame(maxWidth: 280)
                     .background(
                         Capsule()
-                            .fill(MFTheme.recessedBg)
+                            .fill(isDisabled ? MFTheme.recessedBg : MFTheme.inkPrimary)
                             .overlay(Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 1))
                     )
                 }

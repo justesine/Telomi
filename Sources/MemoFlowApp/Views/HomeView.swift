@@ -1,4 +1,6 @@
 import SwiftUI
+import EventKit
+import Combine
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -24,6 +26,33 @@ public struct HomeView: View {
     @State private var showingGroundedQA: Bool = false
     @State private var showingAIMemoryChat: Bool = false
     @State private var recordingPendingDeletion: Recording?
+
+    // CAL-002: Apple 日历与提醒事项统一呈现
+    enum CalendarFilterTab: String, CaseIterable, Identifiable {
+        case all = "全部"
+        case events = "日程"
+        case tasks = "待办"
+
+        var id: String { rawValue }
+
+        func localizedTitle(isEnglish: Bool) -> String {
+            switch self {
+            case .all: return isEnglish ? "All" : "全部"
+            case .events: return isEnglish ? "Events" : "日程"
+            case .tasks: return isEnglish ? "Tasks" : "待办"
+            }
+        }
+    }
+
+    @State private var calendarFilterTab: CalendarFilterTab = .all
+    @State private var dayEvents: [CalendarEventItem] = []
+    @State private var dayScheduledTasks: [ReminderTaskItem] = []
+    @State private var dayUndatedTasks: [ReminderTaskItem] = []
+    @State private var dayCompletedTasks: [ReminderTaskItem] = []
+    @State private var isShowingCompletedAndUndated: Bool = false
+    @State private var hasCalendarAccess: Bool = false
+    @State private var hasRemindersAccess: Bool = false
+    @Environment(\.scenePhase) private var scenePhase
 
     public init(store: MemoFlowStore) {
         self.store = store
@@ -62,18 +91,15 @@ public struct HomeView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 18) {
-                        // 1. 顶部品牌栏与 API/设置胶囊入口
+                        // 1. 顶部品牌栏（BRAND-002: Logo + Telomi 全屏独立居中，两侧功能入口）
                         topBrandHeader
-                        Text(L10n.brandSlogan(isEnglish))
-                            .font(.subheadline)
-                            .foregroundStyle(MFTheme.textSecondary)
 
-                        // 2. Auday 风格首页日期条与横向周切换（非搜索状态下展示）
+                        // 2. 日期条与横向周切换（非搜索状态下展示）
                         if !isSearching {
                             audayDateHeaderView
 
-                            // 3. 24 小时录音活动热力图（PRD V1.2 UI-003）
-                            hourlyActivityHeatmapCard
+                            // 3. Apple 日历与提醒事项统一呈现视图（CAL-002，取代旧热力图 HOME-001）
+                            appleCalendarAndRemindersView
                         } else {
                             globalSearchNoticeBanner
                         }
@@ -141,9 +167,29 @@ public struct HomeView: View {
             .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
             .onAppear {
                 MFTheme.activeTheme = store.preferences.appearanceTheme
+                Task {
+                    await reloadCalendarAndReminders()
+                }
             }
             .onChange(of: store.preferences.appearanceTheme) { _, newTheme in
                 MFTheme.activeTheme = newTheme
+            }
+            .onChange(of: selectedDate) { _, _ in
+                Task {
+                    await reloadCalendarAndReminders()
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    Task {
+                        await reloadCalendarAndReminders()
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+                Task {
+                    await reloadCalendarAndReminders()
+                }
             }
             .sheet(isPresented: $showingRecorderSheet) {
                 RecorderSheetView(store: store)
@@ -233,33 +279,17 @@ public struct HomeView: View {
         }
     }
 
-    // MARK: - 1. Top Brand Header (Left: Settings, Center: Logo & Model, Right: Sync & QA)
+    // MARK: - 1. Top Brand Header (BRAND-002: Left: Settings, Center: Logo + Telomi, Right: Sync & QA)
 
     private var topBrandHeader: some View {
         ZStack {
-            // 中间：Logo 和模型名称
+            // 中间：全屏独立居中 Logo + Telomi 品牌字标（BRAND-002 V1.1）
             HStack(spacing: 8) {
-                MemoFlowWaveformBrandIcon(size: 20)
-
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(MFTheme.mintGreen)
-                        .frame(width: 5, height: 5)
-                    Text(topBarEngineModelName)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MFTheme.textPrimary)
-                        .lineLimit(1)
-                }
+                MemoFlowWaveformBrandIcon(size: 22)
+                Text("Telomi")
+                    .font(.system(size: 21, weight: .semibold, design: .rounded))
+                    .foregroundStyle(MFTheme.textPrimary)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(MFTheme.cardSurfaceGradient)
-                    .overlay(
-                        Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
-                    )
-            )
 
             // 两侧：左侧设置，右侧双向同步与跨笔记问答
             HStack(alignment: .center) {
@@ -292,9 +322,9 @@ public struct HomeView: View {
                             _ = store.syncAllBoundObsidianNotes(hydrateNewFromVault: true)
                         } label: {
                             Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(MFTheme.mintGreen)
-                                .frame(width: 36, height: 36)
+                                .frame(width: 44, height: 44)
                                 .background(
                                     Circle()
                                         .fill(MFTheme.cardSurfaceGradient)
@@ -518,92 +548,349 @@ public struct HomeView: View {
         .mfGlassCard(cornerRadius: 16, padding: 14)
     }
 
-    // MARK: - 3. 24-Hour Recording Activity Heatmap (PRD V1.2 UI-003)
+    // MARK: - 3. Apple 日历与提醒事项统一呈现 (CAL-002, 替换旧热力图 HOME-001)
 
-    private var hourlyActivityHeatmapCard: some View {
-        let targetDate = selectedDate ?? Date()
-        let distribution = store.hourlyActivity(for: targetDate)
-        let totalSeconds = distribution.values.reduce(0) { $0 + $1.durationSeconds }
-        let totalCount = distribution.values.reduce(0) { $0 + $1.count }
+    private var eventTimeFormatter: DateFormatter {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm"
+        return df
+    }
 
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "waveform.path.ecg")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(MFTheme.iceCyan)
-                    Text(isEnglish ? "24h Activity Heatmap" : "24 小时活动热力分布")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MFTheme.textPrimary)
+    private func reloadCalendarAndReminders() async {
+        let service = EventKitIntegrationService.shared
+        hasCalendarAccess = service.hasCalendarReadAccess
+        hasRemindersAccess = service.hasRemindersReadAccess
+
+        let target = selectedDate ?? Date()
+        if hasCalendarAccess {
+            dayEvents = service.fetchEvents(on: target)
+        } else {
+            dayEvents = []
+        }
+
+        if hasRemindersAccess {
+            let (scheduled, undated, completed) = await service.fetchReminders(on: target)
+            dayScheduledTasks = scheduled
+            dayUndatedTasks = undated
+            dayCompletedTasks = completed
+        } else {
+            dayScheduledTasks = []
+            dayUndatedTasks = []
+            dayCompletedTasks = []
+        }
+    }
+
+    private var appleCalendarAndRemindersView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            calendarHeaderBar
+
+            if !hasCalendarAccess && !hasRemindersAccess {
+                calendarAuthBanner
+            } else {
+                let showEvents = (calendarFilterTab == .all || calendarFilterTab == .events)
+                let showTasks = (calendarFilterTab == .all || calendarFilterTab == .tasks)
+                let visibleEvents = showEvents ? dayEvents : []
+                let visibleTasks = showTasks ? dayScheduledTasks.filter { !$0.isCompleted } : []
+
+                if visibleEvents.isEmpty && visibleTasks.isEmpty {
+                    HStack {
+                        Spacer()
+                        Text(isEnglish ? "No schedule or pending tasks for this day" : "当日暂无日程或待办事项")
+                            .font(.system(size: 12))
+                            .foregroundStyle(MFTheme.textMuted)
+                            .padding(.vertical, 10)
+                        Spacer()
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        calendarEventsList(events: visibleEvents)
+                        calendarTasksList(tasks: visibleTasks)
+                    }
                 }
 
-                Spacer()
+                calendarCompletedAndUndatedSection
+            }
+        }
+        .mfGlassCard(cornerRadius: 16, padding: 14)
+    }
 
-                if let hour = selectedHourFilter {
-                    Button(isEnglish ? "Clear Filter (\(String(format: "%02d:00", hour)))" : "取消时段筛选 (\(String(format: "%02d:00", hour)))") {
-                        withAnimation { selectedHourFilter = nil }
-                    }
-                    .font(.system(size: 10, weight: .semibold))
+    private var uncompletedTasksCount: Int {
+        dayScheduledTasks.filter { !$0.isCompleted }.count
+    }
+
+    private var calendarHeaderBar: some View {
+        HStack(alignment: .center) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(MFTheme.warmAmber)
-                    .buttonStyle(.plain)
-                } else {
-                    Text(totalCount > 0 ? (isEnglish ? "Today: \(totalCount) recordings · \(totalSeconds)s" : "当日 \(totalCount) 段录音 · 共 \(totalSeconds) 秒") : (isEnglish ? "No recording activity today" : "当日暂无录音活动"))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+
+                Text(isEnglish ? "Today's Schedule" : "今日安排")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(MFTheme.textPrimary)
+
+                if uncompletedTasksCount > 0 {
+                    Text(isEnglish ? "\(uncompletedTasksCount) pending" : "\(uncompletedTasksCount) 项未完成")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(MFTheme.warmAmber)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(MFTheme.warmAmber.opacity(0.12), in: Capsule())
+                }
+            }
+
+            Spacer()
+
+            calendarFilterPicker
+        }
+    }
+
+    private var calendarFilterPicker: some View {
+        HStack(spacing: 3) {
+            ForEach(CalendarFilterTab.allCases) { tab in
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        calendarFilterTab = tab
+                    }
+                } label: {
+                    let isSelected = (calendarFilterTab == tab)
+                    Text(tab.localizedTitle(isEnglish: isEnglish))
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? MFTheme.textPrimary : MFTheme.textMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            isSelected ? MFTheme.paperSurface : Color.clear,
+                            in: Capsule()
+                        )
+                        .overlay(
+                            isSelected ? Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8) : nil
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(MFTheme.recessedBg, in: Capsule())
+    }
+
+    private var calendarAuthBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(isEnglish ? "Connect Apple Calendar & Reminders" : "连接 Apple 系统日历与提醒事项")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MFTheme.textPrimary)
+            Text(isEnglish ? "Directly view today's schedule and to-dos in Telomi, synced with system changes." : "在 Telomi 首页直接浏览今日安排与待办，并随时随系统同步更新。")
+                .font(.system(size: 11))
+                .foregroundStyle(MFTheme.textSecondary)
+
+            Button {
+                Task {
+                    _ = await EventKitIntegrationService.shared.requestCalendarAccess()
+                    _ = await EventKitIntegrationService.shared.requestRemindersAccess()
+                    await reloadCalendarAndReminders()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(isEnglish ? "Authorize Access" : "开启系统访问权限")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(MFTheme.inkPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(MFTheme.paperSurface, in: Capsule())
+                .overlay(Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func calendarEventsList(events: [CalendarEventItem]) -> some View {
+        ForEach(events) { ev in
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .trailing, spacing: 1) {
+                    if ev.isAllDay {
+                        Text(isEnglish ? "All Day" : "全天")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(MFTheme.textMuted)
+                    } else {
+                        Text(eventTimeFormatter.string(from: ev.startDate))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(MFTheme.textPrimary)
+                        Text(eventTimeFormatter.string(from: ev.endDate))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(MFTheme.textMuted)
+                    }
+                }
+                .frame(width: 44, alignment: .trailing)
+
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color(hex: ev.calendarColorHex) ?? MFTheme.iceCyan)
+                    .frame(width: 3, height: 26)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ev.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MFTheme.textPrimary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Text(ev.calendarTitle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(MFTheme.textMuted)
+
+                        if let loc = ev.location, !loc.isEmpty {
+                            Text("· " + loc)
+                                .font(.system(size: 10))
+                                .foregroundStyle(MFTheme.textMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Spacer()
+            }
+            .padding(.vertical, 3)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarTasksList(tasks: [ReminderTaskItem]) -> some View {
+        ForEach(tasks) { task in
+            HStack(alignment: .center, spacing: 10) {
+                Button {
+                    Task {
+                        _ = await EventKitIntegrationService.shared.toggleReminderCompletion(identifier: task.id)
+                        await reloadCalendarAndReminders()
+                    }
+                } label: {
+                    Image(systemName: "circle")
+                        .font(.system(size: 16))
                         .foregroundStyle(MFTheme.textSecondary)
                 }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MFTheme.textPrimary)
+                        .lineLimit(2)
+
+                    HStack(spacing: 6) {
+                        if task.isOverdue {
+                            Text(isEnglish ? "Overdue" : "逾期未完成")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(MFTheme.coralRed)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(MFTheme.coralRed.opacity(0.12), in: Capsule())
+                        } else if let due = task.dueDate {
+                            Text(eventTimeFormatter.string(from: due))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(MFTheme.textSecondary)
+                        }
+
+                        Text(task.listTitle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(MFTheme.textMuted)
+                    }
+                }
+                Spacer()
             }
+            .padding(.vertical, 3)
+        }
+    }
 
-            // 24 柱直方条
-            HStack(alignment: .bottom, spacing: 3) {
-                ForEach(0..<24, id: \.self) { hour in
-                    let activity = distribution[hour] ?? (0, 0)
-                    let hasActivity = activity.count > 0
-                    let isFiltered = (selectedHourFilter == hour)
-                    let barHeight = hasActivity ? max(14, min(36, CGFloat(activity.durationSeconds) * 0.8)) : 5
+    @ViewBuilder
+    private var calendarCompletedAndUndatedSection: some View {
+        let otherCount = dayCompletedTasks.count + dayUndatedTasks.count
+        if otherCount > 0 {
+            Divider().overlay(MFTheme.paperBorder)
 
-                    Button {
-                        withAnimation {
-                            if selectedHourFilter == hour {
-                                selectedHourFilter = nil
-                            } else if hasActivity {
-                                selectedHourFilter = hour
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isShowingCompletedAndUndated.toggle()
+                }
+            } label: {
+                HStack {
+                    Text(isEnglish ? "Completed & Undated (\(otherCount))" : "已完成 / 无日期待办 (\(otherCount))")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MFTheme.textMuted)
+                    Spacer()
+                    Image(systemName: isShowingCompletedAndUndated ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(MFTheme.textMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isShowingCompletedAndUndated {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !dayCompletedTasks.isEmpty {
+                        Text(isEnglish ? "Completed" : "已完成")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(MFTheme.textMuted)
+
+                        ForEach(dayCompletedTasks) { task in
+                            HStack(alignment: .center, spacing: 10) {
+                                Button {
+                                    Task {
+                                        _ = await EventKitIntegrationService.shared.toggleReminderCompletion(identifier: task.id)
+                                        await reloadCalendarAndReminders()
+                                    }
+                                } label: {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(MFTheme.mintGreen)
+                                }
+                                .buttonStyle(.plain)
+
+                                Text(task.title)
+                                    .font(.system(size: 12))
+                                    .strikethrough()
+                                    .foregroundStyle(MFTheme.textMuted)
+                                Spacer()
                             }
                         }
-                    } label: {
-                        VStack(spacing: 3) {
-                            Capsule()
-                                .fill(
-                                    hasActivity
-                                        ? (isFiltered ? LinearGradient(colors: [MFTheme.warmAmber, MFTheme.iceCyan], startPoint: .top, endPoint: .bottom)
-                                                      : LinearGradient(colors: [MFTheme.iceCyan, MFTheme.iceBlue], startPoint: .top, endPoint: .bottom))
-                                        : LinearGradient(colors: [MFTheme.paperBorder, MFTheme.recessedBg], startPoint: .top, endPoint: .bottom)
-                                )
-                                .frame(height: barHeight)
-                                .shadow(color: hasActivity ? MFTheme.iceBlue.opacity(0.4) : Color.clear, radius: 4)
-                        }
-                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(height: 38, alignment: .bottom)
 
-            // 时间轴刻度
-            HStack {
-                Text("00:00")
-                Spacer()
-                Text("06:00")
-                Spacer()
-                Text("12:00")
-                Spacer()
-                Text("18:00")
-                Spacer()
-                Text("24:00")
+                    if !dayUndatedTasks.isEmpty {
+                        Text(isEnglish ? "Undated" : "未安排具体日期")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(MFTheme.textMuted)
+                            .padding(.top, 4)
+
+                        ForEach(dayUndatedTasks) { task in
+                            HStack(alignment: .center, spacing: 10) {
+                                Button {
+                                    Task {
+                                        _ = await EventKitIntegrationService.shared.toggleReminderCompletion(identifier: task.id)
+                                        await reloadCalendarAndReminders()
+                                    }
+                                } label: {
+                                    Image(systemName: "circle")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(MFTheme.textSecondary)
+                                }
+                                .buttonStyle(.plain)
+
+                                Text(task.title)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                Spacer()
+                                Text(task.listTitle)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(MFTheme.textMuted)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 4)
             }
-            .font(.system(size: 9, weight: .regular, design: .monospaced))
-            .foregroundStyle(MFTheme.textMuted)
         }
-        .mfGlassCard(cornerRadius: 14, padding: 12)
     }
 
     private var headerYearMonthString: String {

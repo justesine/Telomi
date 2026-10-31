@@ -10,7 +10,7 @@ public enum L10n {
     // MARK: - Navigation & Headers
     public static func settings(_ isEnglish: Bool) -> String { tr(isEnglish, "设置", "Settings") }
     public static func serviceAndSettings(_ isEnglish: Bool) -> String { tr(isEnglish, "服务与设置", "Settings") }
-    public static func settingsCenterSubtitle(_ isEnglish: Bool) -> String { tr(isEnglish, "MemoFlow 设置中心", "MemoFlow Settings") }
+    public static func settingsCenterSubtitle(_ isEnglish: Bool) -> String { tr(isEnglish, "Telomi 设置中心", "Telomi Settings") }
     public static func settingsHeaderNote(_ isEnglish: Bool) -> String {
         tr(isEnglish, "按功能模块独立管理 · 密钥安全保存在 Keychain", "Manage features independently · Keys secured in Keychain")
     }
@@ -93,11 +93,11 @@ public enum L10n {
     public static func askMemoryPlaceholder(_ isEnglish: Bool) -> String { tr(isEnglish, "想从记忆里找些什么？", "What would you like to find in your memories?") }
     public static func askMemory(_ isEnglish: Bool) -> String { tr(isEnglish, "问记忆", "Ask Memory") }
     public static func memoryChatTitle(_ isEnglish: Bool) -> String { tr(isEnglish, "聊聊你的记忆", "Talk about your memories") }
-    public static func brandSlogan(_ isEnglish: Bool) -> String { tr(isEnglish, "让每段对话，都有下文。", "Give every conversation a next chapter.") }
+    public static func brandSlogan(_ isEnglish: Bool) -> String { tr(isEnglish, "让每一段记忆都更懂你。", "Let every memory understand you better.") }
     public static func generateProjectNote(_ isEnglish: Bool) -> String { tr(isEnglish, "生成项目笔记", "Generate Project Note") }
     public static func confirmWriteObsidian(_ isEnglish: Bool) -> String { tr(isEnglish, "确认写入 Obsidian", "Confirm Write to Obsidian") }
     public static func appleWatch(_ isEnglish: Bool) -> String { "Apple Watch" }
     public static func appleWatchSync(_ isEnglish: Bool) -> String { tr(isEnglish, "Apple Watch 同步", "Apple Watch Sync") }
     public static func aboutGroup(_ isEnglish: Bool) -> String { tr(isEnglish, "关于", "About") }
-    public static func aboutMemoFlow(_ isEnglish: Bool) -> String { tr(isEnglish, "关于 MemoFlow", "About MemoFlow") }
+    public static func aboutMemoFlow(_ isEnglish: Bool) -> String { tr(isEnglish, "关于 Telomi", "About Telomi") }
 }

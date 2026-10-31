@@ -36,6 +36,20 @@ public func mfDynamicColor(light: Color, dark: Color) -> Color {
     #endif
 }
 
+extension Color {
+    public init?(hex: String?) {
+        guard let raw = hex?.trimmingCharacters(in: CharacterSet.alphanumerics.inverted),
+              raw.count == 6,
+              let intVal = UInt64(raw, radix: 16) else {
+            return nil
+        }
+        let r = Double((intVal >> 16) & 0xFF) / 255.0
+        let g = Double((intVal >> 8) & 0xFF) / 255.0
+        let b = Double(intVal & 0xFF) / 255.0
+        self.init(red: r, green: g, blue: b)
+    }
+}
+
 /// MemoFlow 全局设计系统（PRD V1.3 VIS-001：Readwise 风格极简纸质化 UI）
 /// 设计关键词：纸张感、书籍感、克制、安静、温暖、可读、留白
 public enum MFTheme {
@@ -53,6 +67,14 @@ public enum MFTheme {
     }
 
     // MARK: - Core Backgrounds & Surfaces (Readwise 暖纸与书页卡片)
+
+    /// V2.1 语义 Token
+    public static var paperBackground: Color { canvasBg }
+    public static var paperSurface: Color { cardBgTop }
+    public static var inkPrimary: Color { textPrimary }
+    public static var inkSecondary: Color { textSecondary }
+    public static var warmAccent: Color { iceBlue }
+    public static var lineSubtle: Color { paperBorder }
 
     /// 书页主背景：Light #F7F4EE (暖白纸质书页) / Dark #161514 (深邃夜读墨木)
     public static var canvasBg: Color {

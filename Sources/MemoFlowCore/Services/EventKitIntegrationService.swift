@@ -13,6 +13,76 @@ public struct WritableContainerInfo: Identifiable, Equatable, Sendable {
     }
 }
 
+/// 呈现给用户的 Apple 日历事件视图模型（CAL-002）
+public struct CalendarEventItem: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let startDate: Date
+    public let endDate: Date
+    public let isAllDay: Bool
+    public let calendarTitle: String
+    public let calendarColorHex: String?
+    public let location: String?
+    public let notes: String?
+
+    public init(
+        id: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        calendarTitle: String,
+        calendarColorHex: String? = nil,
+        location: String? = nil,
+        notes: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.startDate = startDate
+        self.endDate = endDate
+        self.isAllDay = isAllDay
+        self.calendarTitle = calendarTitle
+        self.calendarColorHex = calendarColorHex
+        self.location = location
+        self.notes = notes
+    }
+}
+
+/// 呈现给用户的 Apple 提醒事项视图模型（CAL-002）
+public struct ReminderTaskItem: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let dueDate: Date?
+    public var isCompleted: Bool
+    public let completionDate: Date?
+    public let priority: Int
+    public let listTitle: String
+    public let listColorHex: String?
+    public let isOverdue: Bool
+
+    public init(
+        id: String,
+        title: String,
+        dueDate: Date? = nil,
+        isCompleted: Bool = false,
+        completionDate: Date? = nil,
+        priority: Int = 0,
+        listTitle: String = "提醒事项",
+        listColorHex: String? = nil,
+        isOverdue: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.dueDate = dueDate
+        self.isCompleted = isCompleted
+        self.completionDate = completionDate
+        self.priority = priority
+        self.listTitle = listTitle
+        self.listColorHex = listColorHex
+        self.isOverdue = isOverdue
+    }
+}
+
 public enum ExternalWriteExecutionResult: Equatable, Sendable {
     case created(externalIdentifier: String, containerIdentifier: String, containerTitle: String)
     case skippedAlreadyCreated(externalIdentifier: String)
@@ -76,6 +146,125 @@ public final class EventKitIntegrationService: @unchecked Sendable {
         return eventStore.calendars(for: .reminder)
             .filter { $0.allowsContentModifications }
             .map { WritableContainerInfo(id: $0.calendarIdentifier, title: $0.title, sourceTitle: $0.source.title) }
+    }
+
+    // MARK: - Reading Apple Calendar & Reminders (CAL-002)
+
+    public var hasCalendarReadAccess: Bool {
+        let status = calendarAuthorizationStatus()
+        return status == .fullAccess || status == .authorized
+    }
+
+    public var hasRemindersReadAccess: Bool {
+        let status = remindersAuthorizationStatus()
+        return status == .fullAccess || status == .authorized
+    }
+
+    /// 读取指定日期的 Apple 日历日程事件（CAL-002）
+    public func fetchEvents(on date: Date, calendar: Calendar = .current) -> [CalendarEventItem] {
+        guard hasCalendarReadAccess else { return [] }
+        let startOfDay = calendar.startOfDay(for: date)
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else { return [] }
+        let predicate = eventStore.predicateForEvents(withStart: startOfDay, end: endOfDay, calendars: nil)
+        let events = eventStore.events(matching: predicate)
+        return events.map { ev in
+            let hex = ev.calendar.cgColor.flatMap { Self.cgColorToHex($0) }
+            return CalendarEventItem(
+                id: ev.eventIdentifier ?? UUID().uuidString,
+                title: ev.title ?? "无标题日程",
+                startDate: ev.startDate,
+                endDate: ev.endDate,
+                isAllDay: ev.isAllDay,
+                calendarTitle: ev.calendar?.title ?? "日历",
+                calendarColorHex: hex,
+                location: ev.location,
+                notes: ev.notes
+            )
+        }.sorted(by: { $0.startDate < $1.startDate })
+    }
+
+    /// 读取指定日期的 Apple 提醒事项（包含排期到该日、逾期未完成、无日期待办与该日完成项）（CAL-002）
+    public func fetchReminders(on date: Date, calendar: Calendar = .current) async -> (scheduled: [ReminderTaskItem], undated: [ReminderTaskItem], completed: [ReminderTaskItem]) {
+        guard hasRemindersReadAccess else { return ([], [], []) }
+        let predicate = eventStore.predicateForReminders(in: nil)
+        let reminders: [EKReminder] = await withCheckedContinuation { continuation in
+            eventStore.fetchReminders(matching: predicate) { list in
+                continuation.resume(returning: list ?? [])
+            }
+        }
+
+        let startOfDay = calendar.startOfDay(for: date)
+
+        var scheduled: [ReminderTaskItem] = []
+        var undated: [ReminderTaskItem] = []
+        var completed: [ReminderTaskItem] = []
+
+        for r in reminders {
+            let hex = r.calendar.cgColor.flatMap { Self.cgColorToHex($0) }
+            let dueDate = r.dueDateComponents?.date
+            let isOverdue = !r.isCompleted && (dueDate.map { $0 < startOfDay } ?? false)
+            let item = ReminderTaskItem(
+                id: r.calendarItemIdentifier,
+                title: r.title ?? "无标题任务",
+                dueDate: dueDate,
+                isCompleted: r.isCompleted,
+                completionDate: r.completionDate,
+                priority: r.priority,
+                listTitle: r.calendar?.title ?? "提醒事项",
+                listColorHex: hex,
+                isOverdue: isOverdue
+            )
+
+            if r.isCompleted {
+                if let compDate = r.completionDate, calendar.isDate(compDate, inSameDayAs: date) {
+                    completed.append(item)
+                } else if dueDate != nil && calendar.isDate(dueDate!, inSameDayAs: date) {
+                    completed.append(item)
+                }
+            } else if let due = dueDate {
+                if calendar.isDate(due, inSameDayAs: date) || isOverdue {
+                    scheduled.append(item)
+                }
+            } else {
+                undated.append(item)
+            }
+        }
+
+        scheduled.sort { (a, b) in
+            if a.isOverdue != b.isOverdue { return a.isOverdue && !b.isOverdue }
+            return (a.dueDate ?? .distantFuture) < (b.dueDate ?? .distantFuture)
+        }
+        return (scheduled, undated, completed)
+    }
+
+    /// 切换 Apple 提醒事项完成状态（CAL-002）
+    public func toggleReminderCompletion(identifier: String) async -> Bool {
+        guard hasRemindersReadAccess else { return false }
+        guard let reminder = eventStore.calendarItem(withIdentifier: identifier) as? EKReminder else {
+            return false
+        }
+        reminder.isCompleted = !reminder.isCompleted
+        reminder.completionDate = reminder.isCompleted ? Date() : nil
+        do {
+            try eventStore.save(reminder, commit: true)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public static func cgColorToHex(_ cgColor: CGColor) -> String? {
+        guard let components = cgColor.components else { return nil }
+        if components.count >= 3 {
+            let r = max(0, min(255, Int(components[0] * 255.0)))
+            let g = max(0, min(255, Int(components[1] * 255.0)))
+            let b = max(0, min(255, Int(components[2] * 255.0)))
+            return String(format: "#%02X%02X%02X", r, g, b)
+        } else if components.count >= 1 {
+            let val = max(0, min(255, Int(components[0] * 255.0)))
+            return String(format: "#%02X%02X%02X", val, val, val)
+        }
+        return nil
     }
 
     // MARK: - Calendar Event Creation (PRD R18 & A12 & A15 & A16 & A19)

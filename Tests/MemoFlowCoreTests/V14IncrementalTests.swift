@@ -681,4 +681,70 @@ final class V14IncrementalTests: XCTestCase {
         XCTAssertTrue(infoContent.contains("<string>LaunchScreen</string>"))
         XCTAssertTrue(infoContent.contains("<string>audio</string>"), "必须配置 audio 后台模式支持切后台/锁屏录音")
     }
+
+    // MARK: - V2.1 Tests (BRAND-000, BRAND-002, CAL-002, HOME-001)
+
+    func testBRAND002_BrandIdentityAndSlogan() throws {
+        // 1. 验证 V2.1 Slogan 采用较新的 BRAND-002 V1.1 规范（「让每一段记忆都更懂你。」）
+        XCTAssertEqual(L10n.brandSlogan(false), "让每一段记忆都更懂你。")
+        XCTAssertEqual(L10n.brandSlogan(true), "Let every memory understand you better.")
+
+        // 2. 验证设置与关于页文案更名为 Telomi
+        XCTAssertEqual(L10n.aboutMemoFlow(false), "关于 Telomi")
+        XCTAssertEqual(L10n.aboutMemoFlow(true), "About Telomi")
+        XCTAssertEqual(L10n.settingsCenterSubtitle(false), "Telomi 设置中心")
+
+        // 3. 验证 Info.plist 中的 CFBundleDisplayName 与权限描述包含 Telomi
+        let sourceDir = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let infoPlistURL = sourceDir.appendingPathComponent("Info.plist")
+        let infoContent = try String(contentsOf: infoPlistURL, encoding: .utf8)
+
+        XCTAssertTrue(infoContent.contains("<key>CFBundleDisplayName</key>\n\t<string>Telomi</string>"))
+        XCTAssertTrue(infoContent.contains("Telomi 需要访问 Apple 日历"))
+        XCTAssertTrue(infoContent.contains("Telomi 需要访问 Apple 提醒事项"))
+    }
+
+    func testCAL002_EventKitReadingModelsAndColorHex() {
+        // 1. 验证 CalendarEventItem 初始化与全天属性
+        let now = Date()
+        let event = CalendarEventItem(
+            id: "ev-01",
+            title: "架构方案评审会",
+            startDate: now,
+            endDate: now.addingTimeInterval(3600),
+            isAllDay: false,
+            calendarTitle: "工作日历",
+            calendarColorHex: "#3582FF",
+            location: "7号会议室"
+        )
+        XCTAssertEqual(event.id, "ev-01")
+        XCTAssertEqual(event.title, "架构方案评审会")
+        XCTAssertFalse(event.isAllDay)
+        XCTAssertEqual(event.calendarColorHex, "#3582FF")
+
+        // 2. 验证 ReminderTaskItem 逾期与完成标记
+        let overdueTask = ReminderTaskItem(
+            id: "rem-01",
+            title: "提交需求设计文档",
+            dueDate: now.addingTimeInterval(-86400),
+            isCompleted: false,
+            completionDate: nil,
+            priority: 1,
+            listTitle: "待办清单",
+            listColorHex: "#FF5733",
+            isOverdue: true
+        )
+        XCTAssertTrue(overdueTask.isOverdue)
+        XCTAssertFalse(overdueTask.isCompleted)
+
+        // 3. 验证 CGColor 转 Hex 算法在 RGB 色彩空间下的准确性
+        let rgbColor = CGColor(red: 0.2, green: 0.6, blue: 0.8, alpha: 1.0)
+        let hex = EventKitIntegrationService.cgColorToHex(rgbColor)
+        XCTAssertNotNil(hex)
+        XCTAssertTrue(hex!.hasPrefix("#"))
+        XCTAssertEqual(hex!.count, 7)
+    }
 }

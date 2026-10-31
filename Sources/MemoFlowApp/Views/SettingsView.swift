@@ -1594,8 +1594,8 @@ public struct SettingsView: View {
                 }
 
                 Text(isEnglish
-                     ? "MemoFlow supports standalone recording on Apple Watch. Audio files are automatically transferred via WatchConnectivity when connected to your iPhone, preserving original audio and running through AI transcription."
-                     : "MemoFlow 支持在 Apple Watch 上独立录音并安全落盘；连接 iPhone 后通过 WatchConnectivity 自动传输，完整保留原始音频并进入 AI 转写与知识库归档流程。")
+                     ? "Telomi supports standalone recording on Apple Watch. Audio files are automatically transferred via WatchConnectivity when connected to your iPhone, preserving original audio and running through AI transcription."
+                     : "Telomi 支持在 Apple Watch 上独立录音并安全落盘；连接 iPhone 后通过 WatchConnectivity 自动传输，完整保留原始音频并进入 AI 转写与知识库归档流程。")
                     .font(.system(size: 11))
                     .foregroundStyle(MFTheme.textSecondary)
             }
@@ -1614,10 +1614,10 @@ public struct SettingsView: View {
             HStack(spacing: 12) {
                 MemoFlowWaveformBrandIcon(size: 40)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("MemoFlow")
+                    Text("Telomi")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(MFTheme.textPrimary)
-                    Text(isEnglish ? "Version 1.4 (Build 2026.10)" : "版本 1.4 (构建 2026.10)")
+                    Text(isEnglish ? "Version 2.1 (Build 2026.10)" : "版本 2.1 (构建 2026.10)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(MFTheme.textSecondary)
                 }
@@ -1636,8 +1636,8 @@ public struct SettingsView: View {
                     .foregroundStyle(MFTheme.textSecondary)
 
                 Text(isEnglish
-                     ? "MemoFlow is an offline-first voice recording and memory synthesis system. It connects seamlessly with your personal Obsidian vault, providing sample-accurate transcripts, non-destructive smart project notes, and strict fact grounding."
-                     : "MemoFlow 是一款离线优先的口述录音与记忆整理系统。支持毫秒级时间戳对齐、跨录音脉络归纳、受控 Obsidian 双向同步，并严格遵循事实边界，绝不捏造未发生的事项。")
+                     ? "Telomi is an offline-first voice recording and memory synthesis system. It connects seamlessly with your personal Obsidian vault, providing sample-accurate transcripts, non-destructive smart project notes, and strict fact grounding."
+                     : "Telomi 是一款离线优先的口述录音与记忆整理系统。支持毫秒级时间戳对齐、跨录音脉络归纳、受控 Obsidian 双向同步，并严格遵循事实边界，绝不捏造未发生的事项。")
                     .font(.system(size: 12))
                     .foregroundStyle(MFTheme.textPrimary)
             }
@@ -1664,7 +1664,7 @@ public struct SettingsView: View {
 
     private var appearanceSubpageContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(isEnglish ? "Choose how MemoFlow looks on your device." : "选择 MemoFlow 在此设备上的视觉呈现方式。")
+            Text(isEnglish ? "Choose how Telomi looks on your device." : "选择 Telomi 在此设备上的视觉呈现方式。")
                 .font(.caption)
                 .foregroundStyle(MFTheme.textSecondary)
 
@@ -1735,7 +1735,7 @@ public struct SettingsView: View {
 
     private var languageSubpageContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(isEnglish ? "Select your preferred language for the interface." : "选择 MemoFlow 界面显示的默认语言。")
+            Text(isEnglish ? "Select your preferred language for the interface." : "选择 Telomi 界面显示的默认语言。")
                 .font(.caption)
                 .foregroundStyle(MFTheme.textSecondary)
 
