@@ -24,10 +24,10 @@
 		A10000100000000000000001 /* MemoFlowTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000100000000000000001 /* MemoFlowTheme.swift */; };
 		A10000110000000000000001 /* ObsidianKnowledgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000110000000000000001 /* ObsidianKnowledgeService.swift */; };
 		A10000120000000000000001 /* ObsidianNoteSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000120000000000000001 /* ObsidianNoteSyncService.swift */; };
+		A10000130000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* Assets.xcassets */; };
 		A10000140000000000000001 /* MemoFlowLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* MemoFlowLocalization.swift */; };
 		A10000150000000000000001 /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000150000000000000001 /* WatchSyncService.swift */; };
 		A10000160000000000000001 /* AIMemoryChatSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000001 /* AIMemoryChatSheetView.swift */; };
-		A10000130000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,10 +50,10 @@
 		A20000100000000000000001 /* MemoFlowTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowTheme.swift; sourceTree = "<group>"; };
 		A20000110000000000000001 /* ObsidianKnowledgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsidianKnowledgeService.swift; sourceTree = "<group>"; };
 		A20000120000000000000001 /* ObsidianNoteSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsidianNoteSyncService.swift; sourceTree = "<group>"; };
+		A20000130000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20000140000000000000001 /* MemoFlowLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowLocalization.swift; sourceTree = "<group>"; };
 		A20000150000000000000001 /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		A20000160000000000000001 /* AIMemoryChatSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIMemoryChatSheetView.swift; sourceTree = "<group>"; };
-		A20000130000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -296,7 +296,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 8SFRFUPBJQ;
+				DEVELOPMENT_TEAM = MSTM55LQ8H;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -305,7 +305,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.esine.MemoFlow;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.MemoFlow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
@@ -321,7 +321,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 8SFRFUPBJQ;
+				DEVELOPMENT_TEAM = MSTM55LQ8H;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -330,7 +330,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.esine.MemoFlow;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.MemoFlow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
