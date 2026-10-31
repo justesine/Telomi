@@ -53,8 +53,16 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         public let fileName: String
         public let createdAt: Date
         public var marks: [RecordingMark]?
+        public var speakerNicknameTheme: SpeakerNicknameTheme?
     }
     private var journalURL: URL { recordingsDirectoryURL.appendingPathComponent("active-recording.json") }
+
+    public func capturedSpeakerTheme(for id: UUID) -> SpeakerNicknameTheme? {
+        guard let data = try? Data(contentsOf: journalURL),
+              let journal = try? JSONDecoder().decode(RecordingJournal.self, from: data),
+              journal.id == id else { return nil }
+        return journal.speakerNicknameTheme
+    }
 
     public func addRecordingBookmark() {
         guard isRecording,
@@ -197,7 +205,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #endif
     }
 
-    public func startRecording(liveStreaming: Bool = false) async throws -> (id: UUID, fileName: String, createdAt: Date) {
+    public func startRecording(liveStreaming: Bool = false, speakerNicknameTheme: SpeakerNicknameTheme? = nil) async throws -> (id: UUID, fileName: String, createdAt: Date) {
         guard !isRecording, !FileManager.default.fileExists(atPath: journalURL.path) else {
             throw NSError(domain: "MemoFlowAudio", code: 409,
                 userInfo: [NSLocalizedDescriptionKey: "请先保存或恢复上一段录音，再开始新录音。"])
@@ -279,7 +287,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
             self.shouldResumeAfterInterruption = false
             self.recordingBookmarks = []
 
-            let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt)
+            let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt, speakerNicknameTheme: speakerNicknameTheme)
             try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
 
             startMeterTimer()
@@ -302,7 +310,7 @@ public final class AudioRecorderAndPlayerService: NSObject, ObservableObject {
         #if os(iOS)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUnlessOpen], ofItemAtPath: fileURL.path)
         #endif
-        let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt)
+        let journal = RecordingJournal(id: id, fileName: fileName, createdAt: createdAt, speakerNicknameTheme: speakerNicknameTheme)
         try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
         #if os(iOS)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: journalURL.path)

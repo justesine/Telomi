@@ -17,9 +17,11 @@ let package = Package(
             targets: ["MemoFlowApp"]
         )
     ],
+    dependencies: [.package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.6.1")],
     targets: [
         .target(
             name: "MemoFlowCore",
+            dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
             path: "Sources/MemoFlowCore"
         ),
         .executableTarget(

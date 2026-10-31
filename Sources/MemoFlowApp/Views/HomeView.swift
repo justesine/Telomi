@@ -12,6 +12,8 @@ import MemoFlowCore
 /// P01 首页 / 录音列表（黑曜石磨砂玻璃 + 冰蓝内发光视觉语言，PRD 05.P01 & V1.2）
 public struct HomeView: View {
     @ObservedObject var store: MemoFlowStore
+    @ObservedObject private var audioService: AudioRecorderAndPlayerService
+    @State private var startingRecording = false
     @State private var searchText: String = ""
     @State private var selectedDate: Date? = Date()
     @State private var selectedWeekOffset: Int = 0
@@ -25,6 +27,7 @@ public struct HomeView: View {
 
     public init(store: MemoFlowStore) {
         self.store = store
+        self.audioService = store.audioService
     }
 
     private var isSearching: Bool {
@@ -61,6 +64,9 @@ public struct HomeView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         // 1. 顶部品牌栏与 API/设置胶囊入口
                         topBrandHeader
+                        Text(L10n.brandSlogan(isEnglish))
+                            .font(.subheadline)
+                            .foregroundStyle(MFTheme.textSecondary)
 
                         // 2. Auday 风格首页日期条与横向周切换（非搜索状态下展示）
                         if !isSearching {
@@ -125,12 +131,12 @@ public struct HomeView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 14)
-                    .padding(.bottom, 110)
+                    .padding(.bottom, 20)
                 }
 
                 // 底部悬浮暗色玻璃底座 + 冰蓝内发光胶囊按钮
-                bottomStartRecordingBar
             }
+            .safeAreaInset(edge: .bottom) { bottomStartRecordingBar }
             .focusEffectDisabled()
             .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
             .onAppear {
@@ -262,9 +268,9 @@ public struct HomeView: View {
                     showingSettings = true
                 } label: {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 21, weight: .semibold))
                         .foregroundStyle(MFTheme.textPrimary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .background(
                             Circle()
                                 .fill(MFTheme.cardSurfaceGradient)
@@ -304,9 +310,9 @@ public struct HomeView: View {
                         showingAIMemoryChat = true
                     } label: {
                         Image(systemName: "books.vertical")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(MFTheme.softViolet)
-                            .frame(width: 36, height: 36)
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundStyle(MFTheme.textPrimary)
+                            .frame(width: 44, height: 44)
                             .background(
                                 Circle()
                                     .fill(MFTheme.cardSurfaceGradient)
@@ -806,7 +812,8 @@ public struct HomeView: View {
         .padding(.leading, 8)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .background(dockContainerBackground)
+        .frame(maxWidth: 560)
+        .padding(.horizontal, 12)
         .padding(.bottom, 16)
     }
 
@@ -818,7 +825,7 @@ public struct HomeView: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(MFTheme.iceCyan)
-                Text(L10n.askMemoryPlaceholder(isEnglish))
+                Text(L10n.askMemory(isEnglish))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MFTheme.textSecondary)
                     .lineLimit(1)
@@ -826,9 +833,10 @@ public struct HomeView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .frame(minHeight: 56)
             .background(
                 Capsule()
-                    .fill(MFTheme.recessedBg)
+                    .fill(MFTheme.cardSurfaceGradient)
                     .overlay(
                         Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
                     )
@@ -836,10 +844,11 @@ public struct HomeView: View {
         }
         .buttonStyle(.plain)
         .help(L10n.aiMemoryAssistant(isEnglish))
+        .shadow(color: .black.opacity(0.09), radius: 10, y: 4)
     }
 
     private var dockModeSelector: some View {
-        HStack(spacing: 4) {
+        Menu {
             ForEach(NoteMode.allCases, id: \.self) { mode in
                 let isSelected = (store.preferences.defaultNoteMode == mode)
                 Button {
@@ -862,40 +871,63 @@ public struct HomeView: View {
                 }
                 .buttonStyle(.plain)
             }
+        } label: {
+            Text(store.preferences.defaultNoteMode == .quickNote ? (isEnglish ? "Quick" : "随记") : (isEnglish ? "Meeting" : "会议"))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(MFTheme.textPrimary)
+                .frame(width: 56, height: 56)
+                .background(MFTheme.cardSurfaceGradient, in: Circle())
+                .overlay(Circle().strokeBorder(MFTheme.paperBorder, lineWidth: 1))
         }
-        .padding(3)
-        .background(
-            Capsule()
-                .fill(MFTheme.recessedBg)
-                .overlay(
-                    Capsule()
-                        .strokeBorder(MFTheme.paperBorder, lineWidth: 0.8)
-                )
-        )
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel(isEnglish ? "Recording mode" : "录音模式")
+        .disabled(audioService.isRecording || startingRecording)
+        .shadow(color: .black.opacity(0.09), radius: 10, y: 4)
     }
 
     private var luminousStartButton: some View {
         Button {
-            showingRecorderSheet = true
+            if audioService.isRecording {
+                showingRecorderSheet = true
+            } else if store.requiresCloudConsentForLiveRecording() {
+                showingRecorderSheet = true
+            } else {
+                startingRecording = true
+                Task {
+                    defer { startingRecording = false }
+                    do {
+                        _ = try await audioService.startRecording(liveStreaming: store.preferences.liveStreamingTranscriptionEnabled, speakerNicknameTheme: store.preferences.speakerNicknameTheme)
+                    } catch {
+                        store.lastBannerFeedback = error.localizedDescription
+                    }
+                }
+            }
         } label: {
             ZStack {
                 Circle()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.95, green: 0.35, blue: 0.28),
-                                Color(red: 0.88, green: 0.26, blue: 0.20)
+                                MFTheme.textPrimary,
+                                MFTheme.textSecondary
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 44, height: 44)
-                    .shadow(color: Color(red: 0.95, green: 0.35, blue: 0.28).opacity(0.42), radius: 8, x: 0, y: 3)
+                    .frame(width: 52, height: 52)
+                    .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
 
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                VStack(spacing: 2) {
+                    Image(systemName: audioService.isRecording ? (audioService.isPaused ? "pause.fill" : "waveform") : "mic.fill")
+                        .font(.system(size: 19, weight: .semibold))
+                    if audioService.isRecording {
+                        Text(TimeFormatting.formatDuration(audioService.currentRecordingDuration))
+                            .font(.system(size: 9, design: .monospaced))
+                    }
+                }
+                .foregroundStyle(Color.white)
             }
             .padding(2)
             .background(
@@ -907,7 +939,9 @@ public struct HomeView: View {
             )
         }
         .buttonStyle(.plain)
-        .help(isEnglish ? "Start Recording" : "开始录音")
+        .disabled(startingRecording)
+        .accessibilityLabel(audioService.isRecording ? (isEnglish ? "Recording controls" : "录音中，打开暂停与保存控制") : L10n.startRecording(isEnglish))
+        .help(audioService.isRecording ? (isEnglish ? "Recording controls" : "录音中 · 点击暂停或保存") : L10n.startRecording(isEnglish))
     }
 
     private var luminousPillInnerBackground: some View {

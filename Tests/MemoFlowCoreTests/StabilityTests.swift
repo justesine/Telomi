@@ -1,7 +1,96 @@
 import XCTest
+import FluidAudio
 @testable import MemoFlowCore
 
 final class StabilityTests: XCTestCase {
+    func testRealtimeFinalIdentityUsesReliableOverlapAndRejectsEstimatedTiming() {
+        let recordingId = UUID()
+        let turns = [
+            TimedSpeakerSegment(speakerId: "speaker_0", embedding: [1, 0], startTimeSeconds: 0, endTimeSeconds: 5, qualityScore: 1),
+            TimedSpeakerSegment(speakerId: "speaker_1", embedding: [0, 1], startTimeSeconds: 5, endTimeSeconds: 10, qualityScore: 1)
+        ]
+        let segments = [
+            TranscriptSegment(recordingId: recordingId, startMs: 0, endMs: 4000, text: "mine"),
+            TranscriptSegment(recordingId: recordingId, startMs: 5000, endMs: 9000, text: "other"),
+            TranscriptSegment(recordingId: recordingId, startMs: 0, endMs: 4000, text: "estimated", timingIsEstimated: true)
+        ]
+        let identified = VoiceIdentityService.identify(segments: segments, turns: turns, reference: [1, 0])
+        XCTAssertEqual(identified[0].speakerId, "me")
+        XCTAssertEqual(identified[1].speakerId, "local:speaker_1")
+        XCTAssertNil(identified[2].speakerId)
+    }
+
+    @MainActor
+    func testRetranscriptionNameResolutionSurvivesThemeChangeAndStoreRestart() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = root.appendingPathComponent("state.json")
+        let store = MemoFlowStore(customStorageURL: storage)
+        var recording = Recording(title: "retranscribe", localAudioFileName: "audio.m4a")
+        recording.speakerNicknameTheme = .interstellar
+        recording.manualSpeakerNames = ["provider:7": "Alice"]
+        store.recordings = [recording]
+        XCTAssertTrue(store.saveToDisk())
+
+        let reopened = MemoFlowStore(customStorageURL: storage)
+        reopened.preferences.speakerNicknameTheme = .strangerThings
+        let freshSegments = [
+            TranscriptSegment(recordingId: recording.id, startMs: 0, endMs: 1000, text: "manual", speakerId: "provider:7"),
+            TranscriptSegment(recordingId: recording.id, startMs: 1000, endMs: 2000, text: "theme", speakerId: "provider:8")
+        ]
+        let resolved = reopened.resolveSpeakerNames(freshSegments, recording: try XCTUnwrap(reopened.recordings.first))
+        XCTAssertEqual(resolved.map(\.speakerName), ["Alice", "Cooper"])
+    }
+    func testRealVoiceProfileVectorRoundTripAndInvalidSimilarity() throws {
+        var profile = UserVoiceProfile(sampleDuration: 12, sampleAudioFileName: "VoiceProfile/sample.m4a")
+        profile.embedding = [0.6, 0.8]
+        profile.embeddingModel = VoiceIdentityService.modelID
+        let restored = try JSONDecoder().decode(UserVoiceProfile.self, from: JSONEncoder().encode(profile))
+        XCTAssertEqual(restored, profile)
+        XCTAssertEqual(VoiceIdentityService.similarity([0.6, 0.8], [0.6, 0.8]), 1, accuracy: 0.001)
+        XCTAssertLessThan(VoiceIdentityService.similarity([0, 0], [0, 0]), 0)
+        XCTAssertLessThan(VoiceIdentityService.similarity([1], [1, 0]), 0)
+    }
+
+    @MainActor
+    func testDeleteVoiceProfilePersistsAndRemovesOnlyProfileSample() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MemoFlowStore(customStorageURL: root.appendingPathComponent("state.json"))
+        let sampleURL = store.audioService.audioFileURL(for: "VoiceProfile/sample.m4a")
+        try FileManager.default.createDirectory(at: sampleURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("sample".utf8).write(to: sampleURL)
+        var profile = UserVoiceProfile(sampleDuration: 12, sampleAudioFileName: "VoiceProfile/sample.m4a")
+        profile.embedding = [1, 0]
+        profile.embeddingModel = VoiceIdentityService.modelID
+        store.preferences.userVoiceProfile = profile
+        XCTAssertTrue(store.saveToDisk())
+        store.deleteVoiceProfile()
+        XCTAssertNil(store.preferences.userVoiceProfile)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sampleURL.path))
+        XCTAssertNil(MemoFlowStore(customStorageURL: root.appendingPathComponent("state.json")).preferences.userVoiceProfile)
+    }
+
+    @MainActor
+    func testRecoveredRecordingRetainsCapturedTheme() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = root.appendingPathComponent("state.json")
+        let store = MemoFlowStore(customStorageURL: storage)
+        store.preferences.speakerNicknameTheme = .strangerThings
+        XCTAssertTrue(store.saveToDisk())
+        let id = UUID()
+        _ = store.audioService.ensurePlayableDemoAudioFile(named: "demo_recovered.wav", durationSeconds: 6)
+        let journal = AudioRecorderAndPlayerService.RecordingJournal(id: id, fileName: "demo_recovered.wav", createdAt: Date(), speakerNicknameTheme: .interstellar)
+        try JSONEncoder().encode(journal).write(to: store.audioService.recordingsDirectoryURL.appendingPathComponent("active-recording.json"))
+        let restored = MemoFlowStore(customStorageURL: storage)
+        XCTAssertEqual(restored.recordings.first(where: { $0.id == id })?.speakerNicknameTheme, .interstellar)
+        let reopened = MemoFlowStore(customStorageURL: storage)
+        XCTAssertEqual(reopened.recordings.first(where: { $0.id == id })?.speakerNicknameTheme, .interstellar)
+    }
     func testLongRecordingChunkCoverageIncludesShortTail() throws {
         for duration in [0.25, 45.0, 45.1, 2949.676] {
             let ranges = try ASRAndLLMService.chunkRanges(duration: duration)
@@ -160,6 +249,43 @@ final class StabilityTests: XCTestCase {
         let result = ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
             segments: [segment, segment, segment], theme: .strangerThings, userVoiceProfile: UserVoiceProfile())
         XCTAssertTrue(result.allSatisfy { $0.speakerId == nil && $0.speakerName == nil })
+    }
+
+    func testSpeakerNamesFollowFirstUtteranceAndReserveManualNames() {
+        let recordingId = UUID()
+        let segments = [
+            TranscriptSegment(recordingId: recordingId, startMs: 2000, endMs: 3000, text: "later", speakerId: "b"),
+            TranscriptSegment(recordingId: recordingId, startMs: 0, endMs: 1000, text: "first", speakerId: "a", speakerName: "Speaker 1"),
+            TranscriptSegment(recordingId: recordingId, startMs: 3000, endMs: 4000, text: "again", speakerId: "a"),
+            TranscriptSegment(recordingId: recordingId, startMs: 4000, endMs: 5000, text: "manual", speakerId: "c", speakerName: "Dustin")
+        ]
+        let result = ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
+            segments: segments, theme: .strangerThings, userVoiceProfile: nil)
+        XCTAssertEqual(result.map(\.speakerName), ["Lucas", "Max", "Max", "Dustin"])
+        XCTAssertEqual(result.map(\.id), segments.map(\.id))
+    }
+
+    func testRecordingThemeSurvivesPersistenceAndPreferenceChanges() throws {
+        var recording = Recording(title: "theme", localAudioFileName: "test.m4a")
+        recording.speakerNicknameTheme = .interstellar
+        let data = try JSONEncoder().encode(recording)
+        let restored = try JSONDecoder().decode(Recording.self, from: data)
+        var preferences = MemoFlowPreferences()
+        preferences.speakerNicknameTheme = .strangerThings
+        XCTAssertEqual(restored.speakerNicknameTheme, .interstellar)
+        let segment = TranscriptSegment(recordingId: restored.id, startMs: 0, endMs: 1000, text: "hello", speakerId: "provider:0")
+        let mapped = ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
+            segments: [segment], theme: try XCTUnwrap(restored.speakerNicknameTheme), userVoiceProfile: nil)
+        XCTAssertEqual(mapped.first?.speakerName, "Cooper")
+    }
+
+    func testProviderSpeakerLabelsReachNicknameMappingWithoutClaimingSelf() throws {
+        let data = Data(#"{"segments":[{"start":0,"end":1,"text":"hello","speaker":"me"}]}"#.utf8)
+        let parsed = try ASRAndLLMService.shared.parseASRResponseData(data, recordingId: UUID(), totalDuration: 2)
+        XCTAssertEqual(parsed.first?.speakerId, "provider:me")
+        let mapped = ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
+            segments: parsed, theme: .interstellar, userVoiceProfile: nil)
+        XCTAssertEqual(mapped.first?.speakerName, "Cooper")
     }
 
     func testMappingAndTimestampsRejectWrongRecordingAndOutOfBounds() throws {

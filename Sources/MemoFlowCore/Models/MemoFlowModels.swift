@@ -243,6 +243,8 @@ public struct UserVoiceProfile: Codable, Equatable, Sendable {
     public var sampleDuration: TimeInterval
     public var featureDescription: String
     public var sampleAudioFileName: String?
+    public var embedding: [Float]?
+    public var embeddingModel: String?
 
     public init(
         id: UUID = UUID(),
@@ -301,6 +303,9 @@ public struct Recording: Identifiable, Codable, Equatable, Sendable {
     public var vaultAudioRelativePath: String?
     /// WATCH-001：录音设备来源（iPhone/Mac 本机 或 Apple Watch 独立录音）
     public var deviceSource: RecordingDeviceSource?
+    /// Snapshot at capture time; changing preferences never renames past recordings.
+    public var speakerNicknameTheme: SpeakerNicknameTheme?
+    public var manualSpeakerNames: [String: String]?
 
     public init(
         id: UUID = UUID(),

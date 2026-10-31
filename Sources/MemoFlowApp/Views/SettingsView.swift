@@ -387,6 +387,7 @@ public struct SettingsView: View {
     @State private var writableCalendars: [WritableContainerInfo] = []
     @State private var writableReminderLists: [WritableContainerInfo] = []
     @State private var showingResetConfirmation: Bool = false
+    @State private var showingVoiceProfileDeleteConfirmation: Bool = false
 
     // P1-5 检索范围与个人记忆审阅管理状态
     @State private var customIncludedFolderInput: String = ""
@@ -1181,46 +1182,94 @@ public struct SettingsView: View {
                     .foregroundStyle(MFTheme.textSecondary)
 
                 if let profile = store.preferences.userVoiceProfile {
+                    let hasSampleFile: Bool = {
+                        guard let fileName = profile.sampleAudioFileName else { return false }
+                        return FileManager.default.fileExists(atPath: store.audioService.audioFileURL(for: fileName).path)
+                    }()
+                    let enrolledDateStr: String = {
+                        let df = DateFormatter()
+                        df.dateStyle = .medium
+                        df.timeStyle = .short
+                        return df.string(from: profile.enrolledAt)
+                    }()
+
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(profile.featureDescription)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(MFTheme.textPrimary)
-                            Text("已录入（\(Int(profile.sampleDuration)) 秒）· 录音整理时自动标记为本人发言")
-                                .font(.caption2)
-                                .foregroundStyle(MFTheme.textSecondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(profile.featureDescription)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(MFTheme.textPrimary)
+                                if profile.embedding != nil {
+                                    Text("本地端侧")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(MFTheme.mintGreen)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(MFTheme.mintGreen.opacity(0.15), in: Capsule())
+                                }
+                            }
+
+                            if profile.embedding == nil {
+                                Text("⚠️ 旧版档案：缺少向量特征，请重新录制")
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.coralRed)
+                            } else if !hasSampleFile {
+                                Text("录入于 \(enrolledDateStr) · ⚠️ 原音频样本缺失（仍可比对识别）")
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.warmAmber)
+                            } else {
+                                Text("录入于 \(enrolledDateStr) · \(Int(profile.sampleDuration)) 秒样本 · FluidAudio")
+                                    .font(.caption2)
+                                    .foregroundStyle(MFTheme.textSecondary)
+                            }
                         }
                         Spacer()
                         Button("清除档案") {
-                            store.deleteVoiceProfile()
+                            showingVoiceProfileDeleteConfirmation = true
                         }
                         .font(.caption2)
                         .buttonStyle(.bordered)
+                        Button("试听") { store.previewVoiceProfile() }
+                            .disabled(!hasSampleFile || store.voiceEnrollmentBusy)
                     }
                     .padding(10)
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                 } else {
                     HStack {
-                        Text("暂未录入声纹档案")
+                        Text("首次注册会下载模型，音频与特征仅在本机处理。")
                             .font(.caption2)
                             .foregroundStyle(MFTheme.textMuted)
                         Spacer()
-                        Button("录入声纹档案") {
-                            store.enrollVoiceProfile(sampleDuration: 6.0)
-                        }
-                        .font(.caption2.weight(.semibold))
-                        .buttonStyle(.borderedProminent)
                     }
                     .padding(10)
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
 
+            Button(store.voiceEnrollmentRecording ? "结束录制并生成声纹" : "录入 / 重新录制声纹") {
+                Task {
+                    if store.voiceEnrollmentRecording { await store.finishVoiceEnrollment() }
+                    else { await store.startVoiceEnrollment() }
+                }
+            }
+            .disabled(store.voiceEnrollmentBusy || store.audioService.isRecording)
+            if store.voiceEnrollmentBusy { ProgressView() }
+            Text(store.voiceEnrollmentStatus).font(.caption)
             Text("提示：在单篇笔记的逐字稿中点击发言人，可随时手动修改姓名并级联同步。")
                 .font(.caption2)
                 .foregroundStyle(MFTheme.textMuted)
         }
         .mfGlassCard(cornerRadius: 16, padding: 16)
+        .confirmationDialog(
+            "确认删除个人声纹档案？",
+            isPresented: $showingVoiceProfileDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("删除声纹特征与样本", role: .destructive) { store.deleteVoiceProfile() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后，后续录音将不再自动识别“我”。已有逐字稿与原录音不受影响。")
+        }
     }
 
     // MARK: - 5. Obsidian Subpage Content

@@ -55,6 +55,7 @@ final class V14IncrementalTests: XCTestCase {
         let metadata: [String: Any] = [
             "recordingId": recId.uuidString,
             "title": "Watch 晨跑灵感",
+            "speakerNicknameTheme": "interstellar",
             "duration": 60.0,
             "createdAt": Date().timeIntervalSince1970
         ]
@@ -66,6 +67,9 @@ final class V14IncrementalTests: XCTestCase {
         XCTAssertEqual(imported.deviceSource, .appleWatch)
         XCTAssertTrue(imported.isFromAppleWatch)
         XCTAssertEqual(imported.duration, 60.0)
+        XCTAssertEqual(imported.speakerNicknameTheme, .interstellar)
+        store.preferences.speakerNicknameTheme = .strangerThings
+        XCTAssertEqual(store.recordings.first(where: { $0.id == recId })?.speakerNicknameTheme, .interstellar)
 
         // 验证文件已安全落盘至本地 recordings 目录
         let savedAudioURL = store.audioService.recordingsDirectoryURL.appendingPathComponent(imported.localAudioFileName)
@@ -230,5 +234,114 @@ final class V14IncrementalTests: XCTestCase {
 
         let newText = try String(contentsOf: fileURL2, encoding: .utf8)
         XCTAssertEqual(newText, markdown2)
+    }
+
+    func testCHAT001B_RelativeDateFiltering() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+
+        let cal = Calendar.current
+        let referenceNow = cal.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 12, minute: 0))!
+
+        let recToday = Recording(id: UUID(), title: "今天讨论架构", createdAt: referenceNow, duration: 300, localAudioFileName: "today.m4a")
+        let rec10DaysAgo = Recording(id: UUID(), title: "十天前选题", createdAt: cal.date(byAdding: .day, value: -10, to: referenceNow)!, duration: 400, localAudioFileName: "10d.m4a")
+        let rec45DaysAgo = Recording(id: UUID(), title: "上月老讨论", createdAt: cal.date(byAdding: .day, value: -45, to: referenceNow)!, duration: 500, localAudioFileName: "45d.m4a")
+
+        store.recordings = [recToday, rec10DaysAgo, rec45DaysAgo]
+
+        // 1. 查询“最近一个月”：应命中今天与10天前，排除45天前的录音
+        let monthCandidates = store.findProjectNoteCandidates(query: "整理最近一个月的录音", referenceDate: referenceNow)
+        let monthIds = Set(monthCandidates.map(\.recording.id))
+        XCTAssertTrue(monthIds.contains(recToday.id))
+        XCTAssertTrue(monthIds.contains(rec10DaysAgo.id))
+        XCTAssertFalse(monthIds.contains(rec45DaysAgo.id))
+
+        // 2. 查询“最近一周关于架构”：应仅命中今天的录音
+        let weekCandidates = store.findProjectNoteCandidates(query: "把最近一周关于架构的录音整理成项目笔记", referenceDate: referenceNow)
+        XCTAssertEqual(weekCandidates.count, 1)
+        XCTAssertEqual(weekCandidates.first?.recording.title, "今天讨论架构")
+    }
+
+    func testCHAT001E_IdempotentExportWithExistingPath() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vaultDir = tempDir.appendingPathComponent("TestVault")
+        try FileManager.default.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+        store.bindObsidianVault(vaultDir)
+
+        let title = "科研栏目讨论整理"
+        let initialMarkdown = "# 草稿 1"
+
+        // 首次导出
+        let (fileURL1, relPath1, _) = try store.exportProjectNoteToObsidian(
+            title: title,
+            markdown: initialMarkdown,
+            sourceRecordingIds: []
+        )
+        XCTAssertEqual(fileURL1.lastPathComponent, "科研栏目讨论整理.md")
+
+        // 再次保存相同草稿（传入已存在的 relativePath）：幂等更新同一文件，不生成 _1.md
+        let updatedMarkdown = "# 草稿 1（已人工修正补充）"
+        let (fileURL2, relPath2, _) = try store.exportProjectNoteToObsidian(
+            title: title,
+            markdown: updatedMarkdown,
+            sourceRecordingIds: [],
+            existingRelativePath: relPath1
+        )
+        XCTAssertEqual(fileURL1.path, fileURL2.path)
+        XCTAssertEqual(relPath1, relPath2)
+
+        let savedContent = try String(contentsOf: fileURL2, encoding: .utf8)
+        XCTAssertEqual(savedContent, updatedMarkdown)
+    }
+
+    func testCHAT001_OfflineFallbackNoticeAndDecisionTimestampMapping() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let store = MemoFlowStore(customStorageURL: tempDir)
+
+        let rec = Recording(id: UUID(), title: "选题会", createdAt: Date(), duration: 600, localAudioFileName: "x.m4a")
+        store.recordings = [rec]
+
+        // 包含在 03:20 发生的决策逐字稿
+        store.segmentsByRecording[rec.id] = [
+            TranscriptSegment(id: "s1", recordingId: rec.id, startMs: 0, endMs: 5000, text: "大家早"),
+            TranscriptSegment(id: "s2", recordingId: rec.id, startMs: 200000, endMs: 205000, text: "关于经费，确定采用三十万预算方案")
+        ]
+
+        let noteId = UUID()
+        let revId = UUID()
+        let note = Note(id: noteId, recordingId: rec.id, mode: .meetingNote, currentRevisionId: revId)
+        let rev = NoteRevision(
+            id: revId,
+            noteId: noteId,
+            mode: .meetingNote,
+            content: StructuredNoteContent(
+                suggestedTitle: "选题会",
+                summaryOrShortNote: "讨论选题与预算",
+                backgroundPoints: [],
+                keyPoints: [],
+                decisions: ["确定采用三十万预算方案"],
+                chapters: [],
+                historicalContextNotes: [],
+                aiInferences: []
+            ),
+            origin: .ai
+        )
+        store.notesByRecording[rec.id] = note
+        store.revisionsByNote[noteId] = [rev]
+
+        // 未配置 LLM 密钥，应平滑降级到离线规则并包含警示标识
+        let markdown = try await store.synthesizeProjectNote(topic: "选题", selectedRecordingIds: [rec.id])
+
+        XCTAssertTrue(markdown.contains("本地离线规则整理"), "未配置 LLM 时必须明确标注离线降级")
+        XCTAssertTrue(markdown.contains("03:20"), "决策必须精准关联到发生时刻的时间戳，而不是总是 00:00")
     }
 }

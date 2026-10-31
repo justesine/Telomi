@@ -112,6 +112,57 @@ public final class MemoFlowStore: ObservableObject {
 
     public let audioService: AudioRecorderAndPlayerService
     public let persistenceURL: URL
+    @Published public var voiceEnrollmentStatus = ""
+    @Published public var voiceEnrollmentBusy = false
+    @Published public var voiceEnrollmentRecording = false
+    public lazy var voiceRecorder = AudioRecorderAndPlayerService(recordingsDirectory: audioService.recordingsDirectoryURL.appendingPathComponent("VoiceProfile"))
+
+    public func startVoiceEnrollment() async {
+        guard !voiceEnrollmentBusy, !audioService.isRecording else { return }
+        do {
+            if let (journal, _) = voiceRecorder.recoverInterruptedRecording() {
+                voiceRecorder.acknowledgeSavedRecording(id: journal.id)
+            }
+            _ = try await voiceRecorder.startRecording()
+            voiceEnrollmentRecording = true
+            voiceEnrollmentStatus = "录制中：请独自自然说话 10–30 秒。"
+        } catch { voiceEnrollmentStatus = "录制失败：\(error.localizedDescription)" }
+    }
+
+    public func finishVoiceEnrollment() async {
+        guard let sample = voiceRecorder.finishRecording() else { return }
+        voiceEnrollmentRecording = false
+        voiceEnrollmentBusy = true
+        voiceEnrollmentStatus = "处理中：首次使用需下载本地识别模型，随后生成声纹特征…"
+        defer { voiceEnrollmentBusy = false }
+        do {
+            let vector = try await VoiceIdentityService.shared.enroll(voiceRecorder.audioFileURL(for: sample.fileName))
+            var profile = UserVoiceProfile(sampleDuration: sample.duration, featureDescription: "已录入个人声纹", sampleAudioFileName: "VoiceProfile/\(sample.fileName)")
+            profile.embedding = vector
+            profile.embeddingModel = VoiceIdentityService.modelID
+            let previous = preferences.userVoiceProfile
+            preferences.userVoiceProfile = profile
+            guard saveToDisk() else {
+                preferences.userVoiceProfile = previous
+                voiceEnrollmentStatus = "保存失败，原档案与录音样本已保留，请重试。"
+                return
+            }
+            voiceRecorder.acknowledgeSavedRecording(id: sample.id)
+            if let oldFile = previous?.sampleAudioFileName,
+               oldFile != profile.sampleAudioFileName,
+               oldFile.hasPrefix("VoiceProfile/"), !oldFile.contains(".."),
+               oldFile.split(separator: "/").count == 2 {
+                try? FileManager.default.removeItem(at: audioService.audioFileURL(for: oldFile))
+            }
+            voiceEnrollmentStatus = "声纹特征与样本已保存，可用于后续本人识别。"
+        } catch { voiceEnrollmentStatus = "注册失败：\(error.localizedDescription) 原档案保留。" }
+    }
+
+    public func previewVoiceProfile() {
+        guard let profile = preferences.userVoiceProfile, let file = profile.sampleAudioFileName else { return }
+        _ = audioService.play(recording: Recording(title: "声纹试听", duration: profile.sampleDuration, localAudioFileName: file))
+        if let error = audioService.lastPlaybackError { voiceEnrollmentStatus = error }
+    }
 
     public init(
         audioService: AudioRecorderAndPlayerService? = nil,
@@ -163,6 +214,7 @@ public final class MemoFlowStore: ObservableObject {
                     duration: duration, localAudioFileName: journal.fileName,
                     audioInterruptionNote: "上次录音未正常结束，已恢复可读取的音频。请回听核查。")
                 recovered.marks = journal.marks
+                recovered.speakerNicknameTheme = journal.speakerNicknameTheme ?? preferences.speakerNicknameTheme
                 recordings.insert(recovered, at: 0)
             }
             if saveToDisk() { resolvedAudio.acknowledgeSavedRecording(id: journal.id) }
@@ -271,19 +323,125 @@ public final class MemoFlowStore: ObservableObject {
 
     // MARK: - CHAT-001: AI 记忆助手与 Obsidian 智能归档 (PRD V1.4)
 
-    /// CHAT-001B: 跨日期全局检索与录音候选（不受当前单日或热力图限制）
-    public func findProjectNoteCandidates(query: String) -> [ProjectCandidateRecording] {
+    /// 从用户检索查询中解析相对日期区间（如“最近一个月”、“近一周”、“今天”等）
+    public static func parseRelativeDateInterval(
+        from query: String,
+        referenceDate: Date = Date(),
+        calendar: Calendar = Calendar.current
+    ) -> (interval: DateInterval, matchedPhrase: String)? {
+        let lower = query.lowercased()
+        let now = referenceDate
+
+        // 匹配更具体的长词优先
+        let rules: [(phrases: [String], getInterval: (Date, Calendar) -> DateInterval?)] = [
+            // 1. 今天 / 今日 / today
+            (
+                ["今天", "今日", "today"],
+                { date, cal in
+                    let start = cal.startOfDay(for: date)
+                    guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return nil }
+                    return DateInterval(start: start, end: end)
+                }
+            ),
+            // 2. 昨天 / 昨日 / yesterday
+            (
+                ["昨天", "昨日", "yesterday"],
+                { date, cal in
+                    guard let yesterday = cal.date(byAdding: .day, value: -1, to: date) else { return nil }
+                    let start = cal.startOfDay(for: yesterday)
+                    guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return nil }
+                    return DateInterval(start: start, end: end)
+                }
+            ),
+            // 3. 本周 / 这周 / this week
+            (
+                ["本周", "这周", "this week"],
+                { date, cal in
+                    guard let weekInterval = cal.dateInterval(of: .weekOfYear, for: date) else { return nil }
+                    return DateInterval(start: weekInterval.start, end: date)
+                }
+            ),
+            // 4. 上周 / last week
+            (
+                ["上周", "last week"],
+                { date, cal in
+                    guard let prevWeek = cal.date(byAdding: .weekOfYear, value: -1, to: date),
+                          let weekInterval = cal.dateInterval(of: .weekOfYear, for: prevWeek) else { return nil }
+                    return weekInterval
+                }
+            ),
+            // 5. 最近三个月 / 近三个月 / 过去三个月 / 最近一个季度 / last 3 months
+            (
+                ["最近三个月", "近三个月", "过去三个月", "最近一个季度", "近一个季度", "过去一个季度", "last 3 months", "last 90 days"],
+                { date, cal in
+                    guard let start = cal.date(byAdding: .day, value: -90, to: date) else { return nil }
+                    return DateInterval(start: start, end: date)
+                }
+            ),
+            // 6. 最近两周 / 近两周 / 过去两周 / 最近14天 / last 2 weeks / last 14 days
+            (
+                ["最近两周", "近两周", "过去两周", "最近14天", "近14天", "过去14天", "last 2 weeks", "last 14 days"],
+                { date, cal in
+                    guard let start = cal.date(byAdding: .day, value: -14, to: date) else { return nil }
+                    return DateInterval(start: start, end: date)
+                }
+            ),
+            // 7. 最近一个月 / 近一个月 / 过去一个月 / 最近30天 / 近30天 / last month / last 30 days
+            (
+                ["最近一个月", "近一个月", "过去一个月", "最近30天", "近30天", "过去30天", "last month", "last 30 days"],
+                { date, cal in
+                    guard let start = cal.date(byAdding: .day, value: -30, to: date) else { return nil }
+                    return DateInterval(start: start, end: date)
+                }
+            ),
+            // 8. 最近一周 / 近一周 / 过去一周 / 最近7天 / 近7天 / last 7 days
+            (
+                ["最近一周", "近一周", "过去一周", "最近7天", "近7天", "过去7天", "last 7 days"],
+                { date, cal in
+                    guard let start = cal.date(byAdding: .day, value: -7, to: date) else { return nil }
+                    return DateInterval(start: start, end: date)
+                }
+            ),
+            // 9. 今年 / this year
+            (
+                ["今年", "this year"],
+                { date, cal in
+                    guard let yearInterval = cal.dateInterval(of: .year, for: date) else { return nil }
+                    return DateInterval(start: yearInterval.start, end: date)
+                }
+            )
+        ]
+
+        for rule in rules {
+            for phrase in rule.phrases {
+                if lower.contains(phrase) {
+                    if let interval = rule.getInterval(now, calendar) {
+                        return (interval: interval, matchedPhrase: phrase)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// CHAT-001B: 跨日期全局检索与录音候选（不受当前单日或热力图限制，支持自然语言相对日期）
+    public func findProjectNoteCandidates(query: String, referenceDate: Date = Date()) -> [ProjectCandidateRecording] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let allRecordings = recordings
+
+        let parsedDate = Self.parseRelativeDateInterval(from: trimmed, referenceDate: referenceDate)
 
         // 提取主要停用词后的核心搜索词
         let stopWords = [
             "把", "所有", "和", "有关的录音", "关于", "整理成", "整理", "一篇", "项目笔记",
             "按时间线", "归纳讨论", "决策和待办", "再放进", "放进", "Obsidian", "请", "帮我",
-            "相关", "的", "最近一个月", "最近", "这段时间", "所有的", "讨论"
+            "相关", "的", "最近", "这段时间", "所有的", "讨论"
         ]
         var searchTerms: [String] = []
         var cleanedQuery = trimmed
+        if let parsedDate {
+            cleanedQuery = cleanedQuery.replacingOccurrences(of: parsedDate.matchedPhrase, with: " ", options: .caseInsensitive)
+        }
         for sw in stopWords {
             cleanedQuery = cleanedQuery.replacingOccurrences(of: sw, with: " ")
         }
@@ -291,11 +449,16 @@ public final class MemoFlowStore: ObservableObject {
         if !extracted.isEmpty {
             searchTerms = extracted
         }
-        if !trimmed.isEmpty && !searchTerms.contains(trimmed) {
+        if !trimmed.isEmpty && searchTerms.isEmpty && parsedDate == nil {
             searchTerms.append(trimmed)
         }
 
         return allRecordings.compactMap { rec -> ProjectCandidateRecording? in
+            // 若用户指定了时间范围，严格排查录音创建时间是否在区间内
+            if let parsedDate {
+                guard parsedDate.interval.contains(rec.createdAt) else { return nil }
+            }
+
             let segs = segmentsByRecording[rec.id] ?? []
             let rev = currentRevision(for: rec.id)
             let acts = actionDraftsByRecording[rec.id] ?? []
@@ -303,6 +466,10 @@ public final class MemoFlowStore: ObservableObject {
 
             var matchedSnippets: [String] = []
             var reasons: [String] = []
+
+            if let parsedDate {
+                reasons.append("属于「\(parsedDate.matchedPhrase)」范围")
+            }
 
             for term in searchTerms {
                 if rec.title.localizedCaseInsensitiveContains(term) {
@@ -332,8 +499,8 @@ public final class MemoFlowStore: ObservableObject {
                 }
             }
 
-            // 如果用户未输入具体关键词，列出全部录音供勾选整理
-            let isMatch = trimmed.isEmpty || !reasons.isEmpty || !matchedSnippets.isEmpty
+            // 如果用户未输入具体关键词但指定了相对日期，或完全无过滤条件，列出符合时间的所有录音供勾选
+            let isMatch = (parsedDate != nil && searchTerms.isEmpty) || trimmed.isEmpty || !reasons.isEmpty || !matchedSnippets.isEmpty
             guard isMatch else { return nil }
 
             let reasonStr = reasons.isEmpty ? "全部历史录音候选" : Array(Set(reasons)).joined(separator: " · ")
@@ -387,26 +554,29 @@ public final class MemoFlowStore: ObservableObject {
                     apiKey: key
                 )
             } catch {
-                // LLM 遇网络波动或额度异常时平滑降级到离线规则提取，保证可用性
+                // LLM 遇网络波动或额度异常时平滑降级到离线规则提取，并在内容中明确告知用户
                 return ASRAndLLMService.shared.synthesizeProjectNoteLocally(
                     topic: topic,
-                    recordingsData: recordingsData
+                    recordingsData: recordingsData,
+                    isOfflineFallback: true
                 )
             }
         } else {
             return ASRAndLLMService.shared.synthesizeProjectNoteLocally(
                 topic: topic,
-                recordingsData: recordingsData
+                recordingsData: recordingsData,
+                isOfflineFallback: true
             )
         }
     }
 
-    /// CHAT-001E: 预览确认后安全新建 Obsidian Markdown 笔记（绝不覆盖已有笔记）
+    /// CHAT-001E: 预览确认后安全新建或幂等更新 Obsidian Markdown 笔记（绝不意外覆盖无关笔记）
     @discardableResult
     public func exportProjectNoteToObsidian(
         title: String,
         markdown: String,
-        sourceRecordingIds: [UUID]
+        sourceRecordingIds: [UUID],
+        existingRelativePath: String? = nil
     ) throws -> (fileURL: URL, relativePath: String, obsidianOpenURL: URL?) {
         let root = try ObsidianNoteSyncService.resolveAuthorizedVaultURL(preferences: preferences)
         let accessed = root.startAccessingSecurityScopedResource()
@@ -420,16 +590,28 @@ public final class MemoFlowStore: ObservableObject {
             try fm.createDirectory(at: targetDirectoryURL, withIntermediateDirectories: true)
         }
 
-        // 默认新建笔记，不覆盖已有笔记；文件名冲突时自动采用非覆盖安全名称（_1.md 等）
-        let safeBaseTitle = MarkdownExporterService.safeFileTitle(title)
-        var fileName = "\(safeBaseTitle).md"
-        var candidateURL = targetDirectoryURL.appendingPathComponent(fileName)
-        var counter = 1
+        var candidateURL: URL
+        var relativePath: String
 
-        while fm.fileExists(atPath: candidateURL.path) {
-            fileName = "\(safeBaseTitle)_\(counter).md"
-            candidateURL = targetDirectoryURL.appendingPathComponent(fileName)
-            counter += 1
+        if let existingRel = existingRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines), !existingRel.isEmpty {
+            // 幂等保存：如果传入了当前草稿已绑定的相对路径，直接原子更新该目标文件，不产生无谓的 _1, _2 副本
+            let existingTargetURL = root.appendingPathComponent(existingRel)
+            candidateURL = existingTargetURL
+            relativePath = existingRel
+        } else {
+            // 默认新建笔记，不覆盖已有笔记；文件名冲突时自动采用非覆盖安全名称（_1.md 等）
+            let safeBaseTitle = MarkdownExporterService.safeFileTitle(title)
+            var fileName = "\(safeBaseTitle).md"
+            var trialURL = targetDirectoryURL.appendingPathComponent(fileName)
+            var counter = 1
+
+            while fm.fileExists(atPath: trialURL.path) {
+                fileName = "\(safeBaseTitle)_\(counter).md"
+                trialURL = targetDirectoryURL.appendingPathComponent(fileName)
+                counter += 1
+            }
+            candidateURL = trialURL
+            relativePath = subfolder.isEmpty ? fileName : "\(subfolder)/\(fileName)"
         }
 
         guard let data = markdown.data(using: .utf8) else {
@@ -438,12 +620,11 @@ public final class MemoFlowStore: ObservableObject {
 
         try data.write(to: candidateURL, options: .atomic)
 
-        let relativePath = subfolder.isEmpty ? fileName : "\(subfolder)/\(fileName)"
         let openURL = MarkdownExporterService.obsidianOpenURL(vaultRootURL: root, relativePath: relativePath)
 
         lastBannerFeedback = preferences.appLanguage.isEnglish
-            ? "Successfully created Obsidian note: \(fileName)"
-            : "已成功新建 Obsidian 项目笔记：\(fileName)"
+            ? "Successfully saved Obsidian note: \(candidateURL.lastPathComponent)"
+            : "已成功保存 Obsidian 项目笔记：\(candidateURL.lastPathComponent)"
 
         return (candidateURL, relativePath, openURL)
     }
@@ -473,7 +654,7 @@ public final class MemoFlowStore: ObservableObject {
         }
         try fm.copyItem(at: audioFileURL, to: destinationURL)
 
-        let newRecording = Recording(
+        var newRecording = Recording(
             id: recordingId,
             title: finalTitle,
             createdAt: recordedAt,
@@ -484,6 +665,7 @@ public final class MemoFlowStore: ObservableObject {
             processingStatus: .savedPendingTranscription,
             deviceSource: .appleWatch
         )
+        newRecording.speakerNicknameTheme = (metadata["speakerNicknameTheme"] as? String).flatMap(SpeakerNicknameTheme.init(rawValue:)) ?? preferences.speakerNicknameTheme
 
         recordings.insert(newRecording, at: 0)
         lastBannerFeedback = isEn ? "Apple Watch audio imported successfully" : "已成功导入 Apple Watch 录音"
@@ -517,11 +699,29 @@ public final class MemoFlowStore: ObservableObject {
 
     // MARK: - Speaker Management & Voice Profile (PRD V1.2 AI-001 & AI-002)
 
+    public func resolveSpeakerNames(_ segments: [TranscriptSegment], recording: Recording) -> [TranscriptSegment] {
+        let overrides = recording.manualSpeakerNames ?? [:]
+        let seeded = segments.map { segment -> TranscriptSegment in
+            var copy = segment
+            if let id = copy.speakerId, let name = overrides[id] { copy.speakerName = name }
+            return copy
+        }
+        return ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
+            segments: seeded, theme: recording.speakerNicknameTheme ?? .strangerThings,
+            userVoiceProfile: preferences.userVoiceProfile)
+    }
+
     /// 用户手动纠正某条录音中的说话人归属/自定义昵称
     public func updateSpeakerName(recordingId: UUID, speakerId: String, newName: String) {
         guard var segs = segmentsByRecording[recordingId] else { return }
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        let oldNames = Set(segs.filter { $0.speakerId == speakerId || "segment:\($0.id)" == speakerId }.compactMap(\.speakerName))
+        if let index = recordings.firstIndex(where: { $0.id == recordingId }) {
+            if recordings[index].manualSpeakerNames == nil { recordings[index].manualSpeakerNames = [:] }
+            recordings[index].manualSpeakerNames?[speakerId] = trimmed
+        }
 
         for i in 0..<segs.count {
             if segs[i].speakerId == speakerId || "segment:\(segs[i].id)" == speakerId {
@@ -534,7 +734,7 @@ public final class MemoFlowStore: ObservableObject {
         // 同步更新 ActionDraft 中对应的归属人
         if var drafts = actionDraftsByRecording[recordingId] {
             for i in 0..<drafts.count {
-                if drafts[i].owner == speakerId || drafts[i].owner == segs.first?.speakerName {
+                if drafts[i].owner == speakerId || drafts[i].owner.map({ oldNames.contains($0) }) == true {
                     drafts[i].owner = trimmed
                     if trimmed == "我" {
                         drafts[i].ownership = .selfOwner
@@ -549,19 +749,22 @@ public final class MemoFlowStore: ObservableObject {
 
     /// 录入或更新用户个人声纹档案（AI-001）
     public func enrollVoiceProfile(sampleDuration: TimeInterval, description: String = "已录入个人声纹特征档案") {
-        preferences.userVoiceProfile = UserVoiceProfile(
-            enrolledAt: Date(),
-            sampleDuration: sampleDuration,
-            featureDescription: description
-        )
-        saveToDisk()
-        lastBannerFeedback = "档案信息已保存；当前版本尚未接入自动语音身份识别，请人工确认说话人。"
+        voiceEnrollmentStatus = "请录制真实样本并生成声纹特征；仅提供时长不能注册声纹。"
     }
 
     /// 删除个人声纹档案（AI-001）
     public func deleteVoiceProfile() {
+        guard !voiceEnrollmentBusy else { return }
+        let previous = preferences.userVoiceProfile
         preferences.userVoiceProfile = nil
-        saveToDisk()
+        guard saveToDisk() else { preferences.userVoiceProfile = previous; return }
+        audioService.stopPlayback()
+        if let file = previous?.sampleAudioFileName, file.hasPrefix("VoiceProfile/"),
+           !file.contains(".."), file.split(separator: "/").count == 2 {
+            do { try FileManager.default.removeItem(at: audioService.audioFileURL(for: file)) }
+            catch { voiceEnrollmentStatus = "档案已删除，样本文件清理失败：\(error.localizedDescription)"; return }
+        }
+        voiceEnrollmentStatus = "声纹档案已删除，不再用于识别。"
         lastBannerFeedback = "已删除个人声纹档案。"
     }
 
@@ -594,6 +797,7 @@ public final class MemoFlowStore: ObservableObject {
         )
 
         newRecording.marks = marks
+        newRecording.speakerNicknameTheme = audioService.capturedSpeakerTheme(for: id) ?? preferences.speakerNicknameTheme
         recordings.insert(newRecording, at: 0)
         preferences.defaultNoteMode = selectedMode
         lastBannerFeedback = isEn ? "Safely saved audio (\(TimeFormatting.formatDuration(duration)))" : "已安全保存本地音频（\(TimeFormatting.formatDuration(duration))）"
@@ -811,6 +1015,22 @@ public final class MemoFlowStore: ObservableObject {
             }
         }
         allSegments.sort { $0.startMs < $1.startMs }
+        let capturedRecording = recordings[recIdx]
+        let capturedProfile = preferences.userVoiceProfile
+        let audioURL = audioService.audioFileURL(for: capturedRecording.localAudioFileName)
+        if let profile = capturedProfile, profile.embedding != nil {
+            do {
+                let fingerprint = try AudioSourceValidation.fingerprint(audioURL)
+                let identified = try await VoiceIdentityService.shared.identify(url: audioURL, segments: allSegments, profile: profile)
+                guard preferences.userVoiceProfile == capturedProfile,
+                      recordings.contains(where: { $0.id == recordingId && $0.localAudioFileName == capturedRecording.localAudioFileName }),
+                      try AudioSourceValidation.fingerprint(audioURL) == fingerprint else { return }
+                allSegments = identified
+            } catch {
+                lastBannerFeedback = "实时录音声纹识别失败，逐字稿与原音频保留：\(error.localizedDescription)"
+            }
+        }
+        allSegments = resolveSpeakerNames(allSegments, recording: capturedRecording)
         segmentsByRecording[recordingId] = allSegments
 
         // 2. 最终整合并去重
@@ -998,12 +1218,15 @@ public final class MemoFlowStore: ObservableObject {
                     preferences: pipelinePreferences,
                     apiKey: asrKey
                 )
+                if let profile = preferences.userVoiceProfile, profile.embedding != nil {
+                    do {
+                        rawSegments = try await VoiceIdentityService.shared.identify(url: fileURL, segments: rawSegments, profile: profile)
+                    } catch {
+                        lastBannerFeedback = "声纹识别失败，保留转写结果：\(error.localizedDescription)"
+                    }
+                }
                 // 赋予说话人分离标签与电影角色昵称主题（PRD V1.2 AI-001, AI-002, AI-003）
-                rawSegments = ASRAndLLMService.shared.applySpeakerDiarizationAndNicknames(
-                    segments: rawSegments,
-                    theme: preferences.speakerNicknameTheme,
-                    userVoiceProfile: preferences.userVoiceProfile
-                )
+                rawSegments = resolveSpeakerNames(rawSegments, recording: recording)
                 try Task.checkCancellation()
                 guard pipelinePreferences == preferences,
                       let currentIndex = recordings.firstIndex(where: { $0.id == recordingId }),

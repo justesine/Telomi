@@ -53,6 +53,7 @@ public struct AIMemoryChatSheetView: View {
             }
         }
         .background(MFTheme.sheetBg)
+        .presentationCornerRadius(28)
         .preferredColorScheme(store.preferences.appearanceTheme.colorScheme)
         .onAppear {
             performCandidateSearch()
@@ -76,7 +77,7 @@ public struct AIMemoryChatSheetView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.aiMemoryAssistant(isEnglish))
+                Text(L10n.memoryChatTitle(isEnglish))
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(MFTheme.textPrimary)
                 Text(isEnglish ? "Cross-recording retrieval, synthesis & Obsidian archiving" : "跨历史录音全局检索与脉络归纳，预览确认后新建 Obsidian 项目笔记")
@@ -118,7 +119,7 @@ public struct AIMemoryChatSheetView: View {
                             .foregroundStyle(MFTheme.textSecondary)
 
                         TextField(
-                            isEnglish ? "e.g. Synthesize last month's research notes into a project note..." : "例如：把最近关于科研栏目的录音整理成一篇项目笔记…",
+                            L10n.askMemoryPlaceholder(isEnglish),
                             text: $queryText
                         )
                         .textFieldStyle(.plain)
@@ -291,15 +292,16 @@ public struct AIMemoryChatSheetView: View {
                         } else {
                             Image(systemName: "sparkles")
                         }
-                        Text(isGenerating ? (isEnglish ? "Synthesizing Project Note…" : "正在提炼并生成项目笔记…") : (isEnglish ? "Generate Project Note (\(selectedCandidateCount) selected)" : "生成项目笔记（基于选中的 \(selectedCandidateCount) 条录音）"))
+                        Text(isGenerating ? (isEnglish ? "Generating…" : "正在生成…") : L10n.generateProjectNote(isEnglish))
                     }
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.black)
-                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(MFTheme.textPrimary)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .background(
                         Capsule()
-                            .fill(selectedCandidateCount > 0 ? MFTheme.iceCyan : Color.gray.opacity(0.4))
+                            .fill(MFTheme.recessedBg)
+                            .overlay(Capsule().strokeBorder(MFTheme.paperBorder, lineWidth: 1))
                     )
                 }
                 .buttonStyle(.plain)
@@ -444,13 +446,35 @@ public struct AIMemoryChatSheetView: View {
 
                 Spacer()
 
+                if editableMarkdown.contains("generator: MemoFlow Local Rule Engine") {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.horizontal.circle")
+                        Text(isEnglish ? "Local Offline Rule" : "本地离线整理")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MFTheme.warmAmber)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(MFTheme.warmAmber.opacity(0.12), in: Capsule())
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                        Text(isEnglish ? "AI Synthesized" : "AI 深度提炼")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MFTheme.iceCyan)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(MFTheme.iceCyan.opacity(0.12), in: Capsule())
+                }
+
                 // Mode toggle
                 Picker("", selection: $isPreviewMode) {
                     Text(isEnglish ? "Preview" : "格式预览").tag(true)
                     Text(isEnglish ? "Edit Markdown" : "编辑 Markdown").tag(false)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 220)
+                .frame(width: 200)
             }
 
             // Main display: Preview or Editor
@@ -709,8 +733,11 @@ public struct AIMemoryChatSheetView: View {
             let result = try store.exportProjectNoteToObsidian(
                 title: draft.title,
                 markdown: editableMarkdown,
-                sourceRecordingIds: draft.selectedRecordingIds
+                sourceRecordingIds: draft.selectedRecordingIds,
+                existingRelativePath: draft.obsidianRelativePath
             )
+            self.generatedDraft?.obsidianRelativePath = result.relativePath
+            self.generatedDraft?.exportedAt = Date()
             exportOutcome = result
             isExporting = false
         } catch {

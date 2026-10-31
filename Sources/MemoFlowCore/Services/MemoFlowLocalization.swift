@@ -90,7 +90,10 @@ public enum L10n {
 
     // MARK: - CHAT-001 & WATCH-001
     public static func aiMemoryAssistant(_ isEnglish: Bool) -> String { tr(isEnglish, "AI 记忆助手", "AI Memory Assistant") }
-    public static func askMemoryPlaceholder(_ isEnglish: Bool) -> String { tr(isEnglish, "聊聊最近的想法…", "Reflect on recent thoughts…") }
+    public static func askMemoryPlaceholder(_ isEnglish: Bool) -> String { tr(isEnglish, "想从记忆里找些什么？", "What would you like to find in your memories?") }
+    public static func askMemory(_ isEnglish: Bool) -> String { tr(isEnglish, "问记忆", "Ask Memory") }
+    public static func memoryChatTitle(_ isEnglish: Bool) -> String { tr(isEnglish, "聊聊你的记忆", "Talk about your memories") }
+    public static func brandSlogan(_ isEnglish: Bool) -> String { tr(isEnglish, "让每段对话，都有下文。", "Give every conversation a next chapter.") }
     public static func generateProjectNote(_ isEnglish: Bool) -> String { tr(isEnglish, "生成项目笔记", "Generate Project Note") }
     public static func confirmWriteObsidian(_ isEnglish: Bool) -> String { tr(isEnglish, "确认写入 Obsidian", "Confirm Write to Obsidian") }
     public static func appleWatch(_ isEnglish: Bool) -> String { "Apple Watch" }

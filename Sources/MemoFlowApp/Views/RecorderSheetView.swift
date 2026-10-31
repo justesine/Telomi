@@ -357,7 +357,7 @@ public struct RecorderSheetView: View {
         let isLive = store.preferences.liveStreamingTranscriptionEnabled
         do {
             errorMessage = nil
-            _ = try await audioService.startRecording(liveStreaming: isLive)
+            _ = try await audioService.startRecording(liveStreaming: isLive, speakerNicknameTheme: store.preferences.speakerNicknameTheme)
         } catch {
             errorMessage = error.localizedDescription
         }

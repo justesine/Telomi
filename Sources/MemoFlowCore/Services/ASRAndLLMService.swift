@@ -1,4 +1,58 @@
 import Foundation
+import FluidAudio
+
+public actor VoiceIdentityService {
+    public static let shared = VoiceIdentityService()
+    public static let modelID = "FluidAudio-0.6.1-WeSpeaker"
+    private var models: DiarizerModels?
+
+    private func analyze(_ url: URL) async throws -> [TimedSpeakerSegment] {
+        if models == nil { models = try await DiarizerModels.downloadIfNeeded() }
+        let manager = DiarizerManager()
+        manager.initialize(models: models!)
+        let samples = try AudioConverter().resampleAudioFile(url)
+        return try manager.performCompleteDiarization(samples).segments
+    }
+
+    public func enroll(_ url: URL) async throws -> [Float] {
+        let segments = try await analyze(url)
+        guard Set(segments.map(\.speakerId)).count == 1,
+              segments.reduce(Float(0), { $0 + $1.durationSeconds }) >= 5,
+              let best = segments.max(by: { $0.durationSeconds < $1.durationSeconds }),
+              !best.embedding.isEmpty, best.embedding.allSatisfy({ $0.isFinite }) else {
+            throw NSError(domain: "VoiceIdentity", code: 1, userInfo: [NSLocalizedDescriptionKey: "请在安静环境中独自说话至少 10 秒，再重新录入。"])
+        }
+        return best.embedding
+    }
+
+    public static func similarity(_ a: [Float], _ b: [Float]) -> Float {
+        guard !a.isEmpty, a.count == b.count else { return -1 }
+        let denominator = sqrt(a.reduce(0) { $0 + $1 * $1 } * b.reduce(0) { $0 + $1 * $1 })
+        guard denominator > 0 else { return -1 }
+        return zip(a, b).reduce(0) { $0 + $1.0 * $1.1 } / denominator
+    }
+
+    public func identify(url: URL, segments: [TranscriptSegment], profile: UserVoiceProfile) async throws -> [TranscriptSegment] {
+        guard profile.embeddingModel == Self.modelID, let reference = profile.embedding else { return segments }
+        let turns = try await analyze(url)
+        return Self.identify(segments: segments, turns: turns, reference: reference)
+    }
+
+    public static func identify(segments: [TranscriptSegment], turns: [TimedSpeakerSegment], reference: [Float]) -> [TranscriptSegment] {
+        return segments.map { segment in
+            // Estimated text timings cannot reliably establish who spoke the words.
+            guard segment.timingIsEstimated != true else { return segment }
+            let start = Float(segment.startMs) / 1000
+            let end = Float(segment.endMs) / 1000
+            let overlaps = turns.map { ($0, max(0, min(end, $0.endTimeSeconds) - max(start, $0.startTimeSeconds))) }
+            guard let best = overlaps.max(by: { $0.1 < $1.1 }), best.1 >= (end - start) * 0.8 else { return segment }
+            var result = segment
+            result.speakerId = similarity(reference, best.0.embedding) >= 0.8 ? "me" : "local:\(best.0.speakerId)"
+            result.speakerName = nil
+            return result
+        }
+    }
+}
 import Speech
 import AVFoundation
 import CryptoKit
@@ -536,6 +590,8 @@ public final class ASRAndLLMService: Sendable {
                 let start: Double?
                 let end: Double?
                 let text: String?
+                let speaker: String?
+                let speaker_id: String?
             }
             let text: String?
             let segments: [SegmentItem]?
@@ -559,7 +615,8 @@ public final class ASRAndLLMService: Sendable {
                     recordingId: recordingId,
                     startMs: startMs,
                     endMs: endMs,
-                    text: trimmed
+                    text: trimmed,
+                    speakerId: (seg.speaker_id ?? seg.speaker).map { "provider:\($0)" }
                 )
             }
             if !mapped.isEmpty {
@@ -640,10 +697,20 @@ public final class ASRAndLLMService: Sendable {
 
         var assignedNames: [String: String] = [:]
         var usedNicknames = Set<String>()
+        // Reserve persisted/manual names before assigning any new nickname.
+        for segment in segments {
+            if let id = segment.speakerId, !id.isEmpty,
+               let name = segment.speakerName, !name.isEmpty,
+               name != id, !name.lowercased().hasPrefix("speaker"),
+               !name.hasPrefix("说话人"), !name.hasPrefix("发言人") {
+                if assignedNames[id] == nil { assignedNames[id] = name }
+                usedNicknames.insert(name)
+            }
+        }
         let availableNicknames = theme.defaultNicknames
         var result: [TranscriptSegment] = []
 
-        for seg in segments {
+        for seg in segments.sorted(by: { $0.startMs < $1.startMs }) {
             var copy = seg
             // Nicknames describe actual provider speaker IDs; a voice sample alone
             // is not voice identification, and segment order is not diarization.
@@ -651,7 +718,6 @@ public final class ASRAndLLMService: Sendable {
                 result.append(copy)
                 continue
             }
-            if let name = seg.speakerName, !name.isEmpty { result.append(copy); continue }
 
             if let existing = assignedNames[rawSpeakerId] {
                 copy.speakerName = existing
@@ -671,7 +737,8 @@ public final class ASRAndLLMService: Sendable {
             result.append(copy)
         }
 
-        return result
+        let mapped = Dictionary(result.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return segments.map { mapped[$0.id] ?? $0 }
     }
 
     // MARK: - Safe Apple Speech Recognition & Smart Chunking (BUG-001 & BUG-002 Fix)
@@ -1807,10 +1874,30 @@ public final class ASRAndLLMService: Sendable {
                 parts.append("【提取事项】：\(actSummaries.joined(separator: "; "))")
             }
             if !segs.isEmpty {
-                let transcriptLines = segs.prefix(60).map { seg in
+                let selectedSegs: [TranscriptSegment]
+                let coverageNote: String
+                if segs.count <= 100 {
+                    selectedSegs = segs
+                    coverageNote = "（完整覆盖全程共 \(segs.count) 段逐字稿）"
+                } else {
+                    // 全程分段均匀覆盖策略：前 30 段（议程引言）、后 30 段（总结决议）、中间 40 段均匀步长抽样
+                    let head = Array(segs.prefix(30))
+                    let tail = Array(segs.suffix(30))
+                    let middlePool = Array(segs[30..<(segs.count - 30)])
+                    let step = max(1, middlePool.count / 40)
+                    var sampledMiddle: [TranscriptSegment] = []
+                    for i in stride(from: 0, to: middlePool.count, by: step) {
+                        sampledMiddle.append(middlePool[i])
+                        if sampledMiddle.count >= 40 { break }
+                    }
+                    selectedSegs = head + sampledMiddle + tail
+                    coverageNote = "（覆盖全程共 \(segs.count) 段，已采样保留前中后共 \(selectedSegs.count) 段核心对话）"
+                }
+
+                let transcriptLines = selectedSegs.map { seg in
                     "[\(seg.formattedStartTime)] \(seg.speakerName.map { "\($0): " } ?? "")\(seg.text)"
                 }.joined(separator: "\n")
-                parts.append("【逐字稿片段】：\n\(transcriptLines)")
+                parts.append("【逐字稿片段 \(coverageNote)】：\n\(transcriptLines)")
             }
             recordingsContext.append(parts.joined(separator: "\n"))
         }
@@ -1908,7 +1995,8 @@ public final class ASRAndLLMService: Sendable {
 
     public func synthesizeProjectNoteLocally(
         topic: String,
-        recordingsData: [(recording: Recording, segments: [TranscriptSegment], note: NoteRevision?, actions: [ActionDraft])]
+        recordingsData: [(recording: Recording, segments: [TranscriptSegment], note: NoteRevision?, actions: [ActionDraft])],
+        isOfflineFallback: Bool = false
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -1946,12 +2034,15 @@ public final class ASRAndLLMService: Sendable {
             }
         }
 
-        // 3. 关键决定
+        // 3. 关键决定（关联最相近时间戳）
         var decisionLines: [String] = []
         for (rec, segs, rev, _) in recordingsData {
             if let decs = rev?.content.decisions, !decs.isEmpty {
                 for d in decs {
-                    let time = segs.first?.formattedStartTime ?? "00:00"
+                    let matchedSeg = segs.first(where: { seg in
+                        seg.text.contains(d) || d.contains(seg.text) || (!d.isEmpty && seg.text.contains(d.prefix(min(6, d.count))))
+                    })
+                    let time = matchedSeg?.formattedStartTime ?? segs.first?.formattedStartTime ?? "00:00"
                     decisionLines.append("- \(d)（来源：\(rec.title)，\(time)）")
                 }
             }
@@ -1986,14 +2077,21 @@ public final class ASRAndLLMService: Sendable {
             sourceLines.append("- \(rec.title)｜\(recDate)｜`\(rec.id.uuidString.prefix(8))`｜\(timeStr)")
         }
 
+        let fallbackWarningBlock = isOfflineFallback ? """
+        > [!NOTE]
+        > ⚠️ **本地离线规则整理**：因未配置 AI 大模型密钥或云端服务暂时离线，本篇已自动由本地规则引擎提炼生成。关键决定与时间线建议对照逐字稿核验。
+
+        """ : ""
+
         return """
         ---
         title: \(noteTitle)
         source: MemoFlow
         generated_at: \(todayStr)
+        generator: \(isOfflineFallback ? "MemoFlow Local Rule Engine" : "MemoFlow AI Synthesizer")
         ---
 
-        # \(noteTitle)
+        \(fallbackWarningBlock)# \(noteTitle)
 
         ## 一、项目背景
         \(backgroundText)
