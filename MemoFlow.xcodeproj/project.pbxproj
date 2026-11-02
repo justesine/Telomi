@@ -26,7 +26,7 @@
 		A10000110000000000000001 /* ObsidianKnowledgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000110000000000000001 /* ObsidianKnowledgeService.swift */; };
 		A10000120000000000000001 /* ObsidianNoteSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000120000000000000001 /* ObsidianNoteSyncService.swift */; };
 		A10000130000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* Assets.xcassets */; };
-		A10000990000000000000001 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A20000990000000000000001 /* LaunchScreen.storyboard */; };
+		A10000990000000000000001 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A20000990000000000000001 /* LaunchScreen.storyboard */; platformFilters = (ios, ); };
 		A10000140000000000000001 /* MemoFlowLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* MemoFlowLocalization.swift */; };
 		A10000150000000000000001 /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000150000000000000001 /* WatchSyncService.swift */; };
 		A10000160000000000000001 /* AIMemoryChatSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000001 /* AIMemoryChatSheetView.swift */; };
