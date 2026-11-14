@@ -47,8 +47,8 @@ Telomi 是一款采用 Local-First 架构的原生 SwiftUI 应用，支持在 iP
 
 1. 克隆代码仓库：
    ```bash
-   git clone https://github.com/your-username/telomi.git
-   cd telomi
+   git clone https://github.com/justesine/Telomi.git
+   cd Telomi
    ```
 
 2. 运行自动化测试与编译校验：
