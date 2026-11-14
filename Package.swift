@@ -28,6 +28,7 @@ let package = Package(
             name: "MemoFlowApp",
             dependencies: ["MemoFlowCore"],
             path: "Sources/MemoFlowApp",
+            exclude: ["LaunchScreen.storyboard"],
             resources: [
                 .process("Assets.xcassets")
             ]
@@ -42,7 +43,7 @@ let package = Package(
             name: "MemoFlowAcceptanceRunner",
             dependencies: ["MemoFlowCore"],
             path: "Tests/MemoFlowCoreTests",
-            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift", "ObsidianPhasedTests.swift", "LiveStreamingTests.swift"],
+            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift", "ObsidianPhasedTests.swift", "LiveStreamingTests.swift", "V14IncrementalTests.swift"],
             sources: ["PRDTestRunner.swift"]
         )
     ]

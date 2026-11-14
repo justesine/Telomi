@@ -1,5 +1,32 @@
-.DS_Store
+# Xcode & Build Artifacts
+build/
+DerivedData/
+.build/
 .build*/
 *.app/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode User Data & State
 xcuserdata/
+*.xcuserdatad/
 *.xcuserstate
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+
+# OS Generated
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
