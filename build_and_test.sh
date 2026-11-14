@@ -4,11 +4,11 @@ cd "$(dirname "$0")"
 
 # Tests use isolated temporary recording folders, never the live recording library.
 swift test --scratch-path .build-verification
-swift run --scratch-path .build-verification MemoFlowAcceptanceRunner
-xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+swift run --scratch-path .build-verification TelomiAcceptanceRunner
+xcodebuild -project Telomi.xcodeproj -scheme Telomi \
   -configuration Debug -destination 'platform=macOS' \
   -derivedDataPath .build-mac-verification CODE_SIGNING_ALLOWED=NO build
-xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+xcodebuild -project Telomi.xcodeproj -scheme Telomi \
   -configuration Debug -sdk iphonesimulator \
   -derivedDataPath .build-iphone-verification CODE_SIGNING_ALLOWED=NO build
 

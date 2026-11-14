@@ -1,6 +1,6 @@
 import XCTest
 import FluidAudio
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 final class StabilityTests: XCTestCase {
     func testRealtimeFinalIdentityUsesReliableOverlapAndRejectsEstimatedTiming() {

@@ -6,8 +6,8 @@ import AppKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 extension AppearanceTheme {
@@ -50,7 +50,11 @@ extension Color {
     }
 }
 
-/// MemoFlow 全局设计系统（PRD V1.3 VIS-001：Readwise 风格极简纸质化 UI）
+public typealias TelomiTheme = MFTheme
+public typealias MemoFlowTheme = MFTheme
+public typealias TLTheme = MFTheme
+
+/// Telomi 全局设计系统（PRD V1.3 VIS-001：Readwise 风格极简纸质化 UI）
 /// 设计关键词：纸张感、书籍感、克制、安静、温暖、可读、留白
 public enum MFTheme {
     public static var activeTheme: AppearanceTheme = .warmPaper

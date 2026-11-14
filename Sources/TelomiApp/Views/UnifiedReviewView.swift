@@ -1,6 +1,6 @@
 import SwiftUI
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 /// P05 统一待确认页（跨录音汇总未处理行动、分类审核、原话回听与安全批量执行，PRD 05.P05 & R24 & A22 & A31）

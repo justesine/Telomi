@@ -22,16 +22,16 @@ jobs:
       run: swift test
 
     - name: Run Acceptance Tests
-      run: swift run MemoFlowAcceptanceRunner
+      run: swift run TelomiAcceptanceRunner
 
     - name: Build macOS App
       run: |
-        xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+        xcodebuild -project Telomi.xcodeproj -scheme Telomi \
           -configuration Debug -destination 'platform=macOS' \
           CODE_SIGNING_ALLOWED=NO build
 
     - name: Build iOS Simulator App
       run: |
-        xcodebuild -project MemoFlow.xcodeproj -scheme MemoFlow \
+        xcodebuild -project Telomi.xcodeproj -scheme Telomi \
           -configuration Debug -sdk iphonesimulator \
           CODE_SIGNING_ALLOWED=NO build

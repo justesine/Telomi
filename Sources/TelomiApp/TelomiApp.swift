@@ -2,23 +2,23 @@ import SwiftUI
 #if canImport(AppKit)
 import AppKit
 #endif
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 @main
-public struct MemoFlowApp: App {
-    @StateObject private var store: MemoFlowStore
+public struct TelomiApp: App {
+    @StateObject private var store: TelomiStore
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {
         if ProcessInfo.processInfo.arguments.contains("--preview-data")
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MemoFlowPreview-\(UUID().uuidString)")
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TelomiPreview-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            _store = StateObject(wrappedValue: MemoFlowStore(customStorageURL: directory.appendingPathComponent("state.json")))
+            _store = StateObject(wrappedValue: TelomiStore(customStorageURL: directory.appendingPathComponent("state.json")))
         } else {
-            _store = StateObject(wrappedValue: MemoFlowStore())
+            _store = StateObject(wrappedValue: TelomiStore())
         }
         #if os(macOS)
         DispatchQueue.main.async {
@@ -73,8 +73,12 @@ extension NSControl {
 }
 #endif
 
+public typealias MemoFlowApp = TelomiApp
+
 /// 与 AppIcon 一致的 6 柱极简声波品牌图标组件
-public struct MemoFlowWaveformBrandIcon: View {
+public typealias MemoFlowWaveformBrandIcon = TelomiWaveformBrandIcon
+
+public struct TelomiWaveformBrandIcon: View {
     public var size: CGFloat = 34
     private let barRatios: [CGFloat] = [
         0.115, 0.305, 0.485, 0.235, 0.385, 0.145

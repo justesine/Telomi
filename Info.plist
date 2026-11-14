@@ -54,9 +54,10 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>com.esine.MemoFlow.deeplink</string>
+			<string>com.esine.Telomi.deeplink</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>telomi</string>
 				<string>memoflow</string>
 			</array>
 		</dict>

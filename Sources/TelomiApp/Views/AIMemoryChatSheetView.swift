@@ -1,6 +1,6 @@
 import SwiftUI
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 /// CHAT-001: AI 记忆助手与 Obsidian 智能归档（PRD V1.4）

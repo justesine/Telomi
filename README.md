@@ -58,7 +58,7 @@ Telomi 是一款采用 Local-First 架构的原生 SwiftUI 应用，支持在 iP
    ```
 
 3. 在 Xcode 中打开项目：
-   - 打开 `MemoFlow.xcodeproj`。
+   - 打开 `Telomi.xcodeproj`。
    - 在项目的 **Signing & Capabilities** 页面中，选择你自己的 Apple 开发者 Team（个人免费账号或付费账号均可）。
    - 目标平台选择 `My Mac` 或你的 iPhone / iOS 模拟器，按 `Cmd + R` 即可运行。
 
@@ -67,17 +67,17 @@ Telomi 是一款采用 Local-First 架构的原生 SwiftUI 应用，支持在 iP
 ## 代码结构
 
 ```
-MemoFlow/
+Telomi/
 ├── Sources/
-│   ├── MemoFlowCore/           # 核心领域逻辑与后台服务
+│   ├── TelomiCore/             # 核心领域逻辑与后台服务
 │   │   ├── Models/             # 录音、待办、日程与状态数据模型
 │   │   └── Services/           # ASR/LLM、音频录放、EventKit、Obsidian 同步等服务
-│   └── MemoFlowApp/            # 原生 SwiftUI 界面交互
+│   └── TelomiApp/              # 原生 SwiftUI 界面交互
 │       ├── Views/              # 首页、录音弹窗、统一复核、AI 对话与设置视图
 │       └── Assets.xcassets     # 应用图标与主题资产
 ├── Tests/
-│   └── MemoFlowCoreTests/      # PRD 核心验收测试与稳定性测试套件
-├── MemoFlow.xcodeproj          # Xcode 工程配置文件
+│   └── TelomiCoreTests/        # PRD 核心验收测试与稳定性测试套件
+├── Telomi.xcodeproj            # Xcode 工程配置文件
 └── Package.swift               # Swift Package Manager 依赖清单
 ```
 

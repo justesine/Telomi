@@ -1,5 +1,5 @@
 import Foundation
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 @main
 struct PRDTestRunner {

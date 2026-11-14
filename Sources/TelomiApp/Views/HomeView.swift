@@ -7,8 +7,8 @@ import AppKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 /// P01 首页 / 录音列表（黑曜石磨砂玻璃 + 冰蓝内发光视觉语言，PRD 05.P01 & V1.2）

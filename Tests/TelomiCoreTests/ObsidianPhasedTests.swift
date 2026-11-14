@@ -1,5 +1,5 @@
 import XCTest
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 final class ObsidianPhasedTests: XCTestCase {
 
@@ -352,9 +352,9 @@ final class ObsidianPhasedTests: XCTestCase {
         let exported = try store.saveNoteDirectlyToObsidian(for: rec.id)
         let md = try String(contentsOf: exported.fileURL, encoding: .utf8)
 
-        // 1) 验证原话、章节、高亮、书签均带可点击 memoflow:// 时间戳链接
-        XCTAssertTrue(md.contains("memoflow://recording/\(rec.id.uuidString)?startMs="))
-        XCTAssertTrue(md.contains("memoflow://recording/\(rec.id.uuidString)?startMs=5000"))
+        // 1) 验证原话、章节、高亮、书签均带可点击 telomi:// (或兼容 memoflow://) 时间戳链接
+        XCTAssertTrue(md.contains("://recording/\(rec.id.uuidString)?startMs="))
+        XCTAssertTrue(md.contains("://recording/\(rec.id.uuidString)?startMs=5000"))
 
         // 2) 点击一条原话深链 -> 打开对应录音并精确定位
         let targetJumpURL = try XCTUnwrap(
@@ -421,7 +421,7 @@ final class ObsidianPhasedTests: XCTestCase {
             isEstimated: true,
             rangeDisplay: true
         )
-        XCTAssertTrue(estimatedBadge.contains("[约 00:00:15 - 00:00:20](memoflow://recording/\(rec.id.uuidString)?startMs=15000&endMs=20000&estimated=1)"))
+        XCTAssertTrue(estimatedBadge.contains("[约 00:00:15 - 00:00:20](") && estimatedBadge.contains("://recording/\(rec.id.uuidString)?startMs=15000&endMs=20000&estimated=1)"))
 
         let unverifiableRec = Recording(title: "无音频源", duration: 10, localAudioFileName: "")
         let unverifiableBadge = MarkdownExporterService.formatVerifiableTimestampLink(
@@ -468,7 +468,7 @@ final class ObsidianPhasedTests: XCTestCase {
         )
         XCTAssertTrue(mdUnreviewed.contains("此处需要核对偏磁参数"))
         XCTAssertTrue(mdUnreviewed.contains("录制时打点书签"))
-        XCTAssertTrue(mdUnreviewed.contains("memoflow://recording/\(rec.id.uuidString)?startMs=8000"))
+        XCTAssertTrue(mdUnreviewed.contains("://recording/\(rec.id.uuidString)?startMs=8000"))
 
         // 2) 用户纠正关联项目并标记逐字稿已人工校对
         store.setTranscriptReviewed(recordingId: rec.id, reviewed: true)

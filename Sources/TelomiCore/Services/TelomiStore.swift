@@ -10,6 +10,9 @@ public struct RecordingSearchResult: Identifiable, Equatable, Sendable {
     public let matchedSegmentStartMs: Int?
 }
 
+public typealias TelomiStore = MemoFlowStore
+public typealias TelomiPreferences = MemoFlowPreferences
+
 @MainActor
 public final class MemoFlowStore: ObservableObject {
 

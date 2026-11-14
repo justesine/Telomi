@@ -2,48 +2,48 @@
 import PackageDescription
 
 let package = Package(
-    name: "MemoFlow",
+    name: "Telomi",
     platforms: [
         .iOS(.v17),
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "MemoFlowCore",
-            targets: ["MemoFlowCore"]
+            name: "TelomiCore",
+            targets: ["TelomiCore"]
         ),
         .executable(
-            name: "MemoFlowApp",
-            targets: ["MemoFlowApp"]
+            name: "TelomiApp",
+            targets: ["TelomiApp"]
         )
     ],
     dependencies: [.package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.6.1")],
     targets: [
         .target(
-            name: "MemoFlowCore",
+            name: "TelomiCore",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
-            path: "Sources/MemoFlowCore"
+            path: "Sources/TelomiCore"
         ),
         .executableTarget(
-            name: "MemoFlowApp",
-            dependencies: ["MemoFlowCore"],
-            path: "Sources/MemoFlowApp",
+            name: "TelomiApp",
+            dependencies: ["TelomiCore"],
+            path: "Sources/TelomiApp",
             exclude: ["LaunchScreen.storyboard"],
             resources: [
                 .process("Assets.xcassets")
             ]
         ),
         .testTarget(
-            name: "MemoFlowCoreTests",
-            dependencies: ["MemoFlowCore"],
-            path: "Tests/MemoFlowCoreTests",
+            name: "TelomiCoreTests",
+            dependencies: ["TelomiCore"],
+            path: "Tests/TelomiCoreTests",
             exclude: ["PRDTestRunner.swift"]
         ),
         .executableTarget(
-            name: "MemoFlowAcceptanceRunner",
-            dependencies: ["MemoFlowCore"],
-            path: "Tests/MemoFlowCoreTests",
-            exclude: ["MemoFlowPRDAcceptanceTests.swift", "StabilityTests.swift", "ObsidianPhasedTests.swift", "LiveStreamingTests.swift", "V14IncrementalTests.swift"],
+            name: "TelomiAcceptanceRunner",
+            dependencies: ["TelomiCore"],
+            path: "Tests/TelomiCoreTests",
+            exclude: ["TelomiPRDAcceptanceTests.swift", "StabilityTests.swift", "ObsidianPhasedTests.swift", "LiveStreamingTests.swift", "V14IncrementalTests.swift"],
             sources: ["PRDTestRunner.swift"]
         )
     ]

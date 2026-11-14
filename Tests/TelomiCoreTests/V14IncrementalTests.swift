@@ -1,5 +1,5 @@
 import XCTest
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 @MainActor
 final class V14IncrementalTests: XCTestCase {
@@ -664,10 +664,12 @@ final class V14IncrementalTests: XCTestCase {
     func testVIS001_LaunchScreenAndBackgroundAudioConfiguration() throws {
         // 验证 LaunchScreen.storyboard 存在并且包含标准根视图与暖纸背景色
         let sourceDir = URL(fileURLWithPath: #file)
-            .deletingLastPathComponent() // MemoFlowCoreTests
+            .deletingLastPathComponent() // TelomiCoreTests
             .deletingLastPathComponent() // Tests
             .deletingLastPathComponent() // root
-        let launchScreenURL = sourceDir.appendingPathComponent("Sources/MemoFlowApp/LaunchScreen.storyboard")
+        let launchScreenURL = FileManager.default.fileExists(atPath: sourceDir.appendingPathComponent("Sources/TelomiApp/LaunchScreen.storyboard").path)
+            ? sourceDir.appendingPathComponent("Sources/TelomiApp/LaunchScreen.storyboard")
+            : sourceDir.appendingPathComponent("Sources/MemoFlowApp/LaunchScreen.storyboard")
         XCTAssertTrue(FileManager.default.fileExists(atPath: launchScreenURL.path), "LaunchScreen.storyboard 必须存在以消除 iPhone 上下黑边")
 
         let content = try String(contentsOf: launchScreenURL, encoding: .utf8)

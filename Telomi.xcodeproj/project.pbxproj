@@ -8,53 +8,53 @@
 
 /* Begin PBXBuildFile section */
         F10000000000000000000001 = {isa = PBXBuildFile; productRef = F10000000000000000000002; };
-		A10000010000000000000001 /* MemoFlowModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* MemoFlowModels.swift */; };
+		A10000010000000000000001 /* TelomiModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* TelomiModels.swift */; };
 		A10000020000000000000001 /* KeychainAndSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020000000000000001 /* KeychainAndSettingsService.swift */; };
 		A10000030000000000000001 /* RelativeDateAndActionValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000030000000000000001 /* RelativeDateAndActionValidator.swift */; };
 		A10000040000000000000001 /* ASRAndLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000040000000000000001 /* ASRAndLLMService.swift */; };
 		A10000050000000000000001 /* MarkdownExporterService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000050000000000000001 /* MarkdownExporterService.swift */; };
 		A10000060000000000000001 /* EventKitIntegrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000060000000000000001 /* EventKitIntegrationService.swift */; };
 		A10000070000000000000001 /* AudioRecorderAndPlayerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000070000000000000001 /* AudioRecorderAndPlayerService.swift */; };
-		A10000080000000000000001 /* MemoFlowStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000080000000000000001 /* MemoFlowStore.swift */; };
-		A10000090000000000000001 /* MemoFlowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000090000000000000001 /* MemoFlowApp.swift */; };
+		A10000080000000000000001 /* TelomiStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000080000000000000001 /* TelomiStore.swift */; };
+		A10000090000000000000001 /* TelomiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000090000000000000001 /* TelomiApp.swift */; };
 		A100000A0000000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000A0000000000000001 /* HomeView.swift */; };
 		A100000B0000000000000001 /* RecorderSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B0000000000000001 /* RecorderSheetView.swift */; };
 		A100000C0000000000000001 /* RecordingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C0000000000000001 /* RecordingDetailView.swift */; };
 		A100000D0000000000000001 /* UnifiedReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D0000000000000001 /* UnifiedReviewView.swift */; };
 		A100000E0000000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E0000000000000001 /* SettingsView.swift */; };
-		A10000100000000000000001 /* MemoFlowTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000100000000000000001 /* MemoFlowTheme.swift */; };
+		A10000100000000000000001 /* TelomiTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000100000000000000001 /* TelomiTheme.swift */; };
 		A10000110000000000000001 /* ObsidianKnowledgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000110000000000000001 /* ObsidianKnowledgeService.swift */; };
 		A10000120000000000000001 /* ObsidianNoteSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000120000000000000001 /* ObsidianNoteSyncService.swift */; };
 		A10000130000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* Assets.xcassets */; };
 		A10000990000000000000001 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A20000990000000000000001 /* LaunchScreen.storyboard */; platformFilters = (ios, ); };
-		A10000140000000000000001 /* MemoFlowLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* MemoFlowLocalization.swift */; };
+		A10000140000000000000001 /* TelomiLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* TelomiLocalization.swift */; };
 		A10000150000000000000001 /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000150000000000000001 /* WatchSyncService.swift */; };
 		A10000160000000000000001 /* AIMemoryChatSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000001 /* AIMemoryChatSheetView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A20000000000000000000001 /* MemoFlow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MemoFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A20000010000000000000001 /* MemoFlowModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowModels.swift; sourceTree = "<group>"; };
+		A20000000000000000000001 /* Telomi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Telomi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000010000000000000001 /* TelomiModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelomiModels.swift; sourceTree = "<group>"; };
 		A20000020000000000000001 /* KeychainAndSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainAndSettingsService.swift; sourceTree = "<group>"; };
 		A20000030000000000000001 /* RelativeDateAndActionValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeDateAndActionValidator.swift; sourceTree = "<group>"; };
 		A20000040000000000000001 /* ASRAndLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ASRAndLLMService.swift; sourceTree = "<group>"; };
 		A20000050000000000000001 /* MarkdownExporterService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownExporterService.swift; sourceTree = "<group>"; };
 		A20000060000000000000001 /* EventKitIntegrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventKitIntegrationService.swift; sourceTree = "<group>"; };
 		A20000070000000000000001 /* AudioRecorderAndPlayerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderAndPlayerService.swift; sourceTree = "<group>"; };
-		A20000080000000000000001 /* MemoFlowStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowStore.swift; sourceTree = "<group>"; };
-		A20000090000000000000001 /* MemoFlowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowApp.swift; sourceTree = "<group>"; };
+		A20000080000000000000001 /* TelomiStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelomiStore.swift; sourceTree = "<group>"; };
+		A20000090000000000000001 /* TelomiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelomiApp.swift; sourceTree = "<group>"; };
 		A200000A0000000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		A200000B0000000000000001 /* RecorderSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderSheetView.swift; sourceTree = "<group>"; };
 		A200000C0000000000000001 /* RecordingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingDetailView.swift; sourceTree = "<group>"; };
 		A200000D0000000000000001 /* UnifiedReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedReviewView.swift; sourceTree = "<group>"; };
 		A200000E0000000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A200000F0000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A20000100000000000000001 /* MemoFlowTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowTheme.swift; sourceTree = "<group>"; };
+		A20000100000000000000001 /* TelomiTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelomiTheme.swift; sourceTree = "<group>"; };
 		A20000110000000000000001 /* ObsidianKnowledgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsidianKnowledgeService.swift; sourceTree = "<group>"; };
 		A20000120000000000000001 /* ObsidianNoteSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsidianNoteSyncService.swift; sourceTree = "<group>"; };
 		A20000130000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20000990000000000000001 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		A20000140000000000000001 /* MemoFlowLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoFlowLocalization.swift; sourceTree = "<group>"; };
+		A20000140000000000000001 /* TelomiLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelomiLocalization.swift; sourceTree = "<group>"; };
 		A20000150000000000000001 /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		A20000160000000000000001 /* AIMemoryChatSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIMemoryChatSheetView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -83,44 +83,44 @@
 		A40000010000000000000001 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				A40000020000000000000001 /* MemoFlowCore */,
-				A40000040000000000000001 /* MemoFlowApp */,
+				A40000020000000000000001 /* TelomiCore */,
+				A40000040000000000000001 /* TelomiApp */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		A40000020000000000000001 /* MemoFlowCore */ = {
+		A40000020000000000000001 /* TelomiCore */ = {
 			isa = PBXGroup;
 			children = (
 				A40000030000000000000001 /* Models */,
 				A40000070000000000000001 /* Services */,
 			);
-			path = MemoFlowCore;
+			path = TelomiCore;
 			sourceTree = "<group>";
 		};
 		A40000030000000000000001 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				A20000010000000000000001 /* MemoFlowModels.swift */,
+				A20000010000000000000001 /* TelomiModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
 		};
-		A40000040000000000000001 /* MemoFlowApp */ = {
+		A40000040000000000000001 /* TelomiApp */ = {
 			isa = PBXGroup;
 			children = (
-				A20000090000000000000001 /* MemoFlowApp.swift */,
+				A20000090000000000000001 /* TelomiApp.swift */,
 				A20000130000000000000001 /* Assets.xcassets */,
 				A20000990000000000000001 /* LaunchScreen.storyboard */,
 				A40000050000000000000001 /* Views */,
 			);
-			path = MemoFlowApp;
+			path = TelomiApp;
 			sourceTree = "<group>";
 		};
 		A40000050000000000000001 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				A20000100000000000000001 /* MemoFlowTheme.swift */,
+				A20000100000000000000001 /* TelomiTheme.swift */,
 				A200000A0000000000000001 /* HomeView.swift */,
 				A200000B0000000000000001 /* RecorderSheetView.swift */,
 				A200000C0000000000000001 /* RecordingDetailView.swift */,
@@ -134,7 +134,7 @@
 		A40000060000000000000001 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A20000000000000000000001 /* MemoFlow.app */,
+				A20000000000000000000001 /* Telomi.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -148,10 +148,10 @@
 				A20000050000000000000001 /* MarkdownExporterService.swift */,
 				A20000060000000000000001 /* EventKitIntegrationService.swift */,
 				A20000070000000000000001 /* AudioRecorderAndPlayerService.swift */,
-				A20000080000000000000001 /* MemoFlowStore.swift */,
+				A20000080000000000000001 /* TelomiStore.swift */,
 				A20000110000000000000001 /* ObsidianKnowledgeService.swift */,
 				A20000120000000000000001 /* ObsidianNoteSyncService.swift */,
-				A20000140000000000000001 /* MemoFlowLocalization.swift */,
+				A20000140000000000000001 /* TelomiLocalization.swift */,
 				A20000150000000000000001 /* WatchSyncService.swift */,
 			);
 			path = Services;
@@ -160,7 +160,7 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A50000010000000000000001 /* MemoFlow */ = {
+		A50000010000000000000001 /* Telomi */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A80000020000000000000001 /* Build configuration list for PBXNativeTarget "MemoFlow" */;
 			buildPhases = (
@@ -172,10 +172,10 @@
 			);
 			dependencies = (
 			);
-			name = MemoFlow;
+			name = Telomi;
             packageProductDependencies = (F10000000000000000000002,);
-			productName = MemoFlow;
-			productReference = A20000000000000000000001 /* MemoFlow.app */;
+			productName = Telomi;
+			productReference = A20000000000000000000001 /* Telomi.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -208,7 +208,7 @@
 			projectRoot = "";
             packageReferences = (F10000000000000000000003,);
 			targets = (
-				A50000010000000000000001 /* MemoFlow */,
+				A50000010000000000000001 /* Telomi */,
 			);
 		};
 /* End PBXProject section */
@@ -232,26 +232,26 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000010000000000000001 /* MemoFlowModels.swift in Sources */,
+				A10000010000000000000001 /* TelomiModels.swift in Sources */,
 				A10000020000000000000001 /* KeychainAndSettingsService.swift in Sources */,
 				A10000030000000000000001 /* RelativeDateAndActionValidator.swift in Sources */,
 				A10000040000000000000001 /* ASRAndLLMService.swift in Sources */,
 				A10000050000000000000001 /* MarkdownExporterService.swift in Sources */,
 				A10000060000000000000001 /* EventKitIntegrationService.swift in Sources */,
 				A10000070000000000000001 /* AudioRecorderAndPlayerService.swift in Sources */,
-				A10000080000000000000001 /* MemoFlowStore.swift in Sources */,
+				A10000080000000000000001 /* TelomiStore.swift in Sources */,
 				A10000110000000000000001 /* ObsidianKnowledgeService.swift in Sources */,
 				A10000120000000000000001 /* ObsidianNoteSyncService.swift in Sources */,
-				A10000140000000000000001 /* MemoFlowLocalization.swift in Sources */,
+				A10000140000000000000001 /* TelomiLocalization.swift in Sources */,
 				A10000150000000000000001 /* WatchSyncService.swift in Sources */,
 				A10000160000000000000001 /* AIMemoryChatSheetView.swift in Sources */,
-				A10000090000000000000001 /* MemoFlowApp.swift in Sources */,
+				A10000090000000000000001 /* TelomiApp.swift in Sources */,
 				A100000A0000000000000001 /* HomeView.swift in Sources */,
 				A100000B0000000000000001 /* RecorderSheetView.swift in Sources */,
 				A100000C0000000000000001 /* RecordingDetailView.swift in Sources */,
 				A100000D0000000000000001 /* UnifiedReviewView.swift in Sources */,
 				A100000E0000000000000001 /* SettingsView.swift in Sources */,
-				A10000100000000000000001 /* MemoFlowTheme.swift in Sources */,
+				A10000100000000000000001 /* TelomiTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -315,7 +315,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.MemoFlow;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.Telomi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
@@ -340,7 +340,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.MemoFlow;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justesine.Telomi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;

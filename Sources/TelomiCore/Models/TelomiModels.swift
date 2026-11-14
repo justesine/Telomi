@@ -1614,7 +1614,9 @@ public struct NoteVersionProvenance: Equatable, Sendable {
     }
 }
 
-/// P1-3：MemoFlow 应用内双向深链解析与构造（`memoflow://recording/<UUID>?startMs=...&endMs=...&estimated=1`）
+/// P1-3：Telomi 应用内双向深链解析与构造（`telomi://recording/<UUID>?startMs=...&endMs=...&estimated=1`）
+public typealias TelomiDeepLink = MemoFlowDeepLink
+
 public struct MemoFlowDeepLink: Equatable, Sendable {
     public let recordingId: UUID
     public let startMs: Int?
@@ -1635,7 +1637,7 @@ public struct MemoFlowDeepLink: Equatable, Sendable {
         isEstimated: Bool = false
     ) -> URL? {
         var comps = URLComponents()
-        comps.scheme = "memoflow"
+        comps.scheme = "telomi"
         comps.host = "recording"
         comps.path = "/\(recordingId.uuidString)"
         var items: [URLQueryItem] = []
@@ -1655,7 +1657,8 @@ public struct MemoFlowDeepLink: Equatable, Sendable {
     }
 
     public static func parse(_ url: URL) -> MemoFlowDeepLink? {
-        guard url.scheme?.lowercased() == "memoflow" else { return nil }
+        let scheme = url.scheme?.lowercased()
+        guard scheme == "telomi" || scheme == "memoflow" else { return nil }
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
 
         let host = comps.host?.lowercased() ?? ""

@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 @MainActor
 final class LiveStreamingTests: XCTestCase {

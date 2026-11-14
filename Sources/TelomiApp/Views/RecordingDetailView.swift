@@ -6,8 +6,8 @@ import AppKit
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 /// P03 处理状态页 + P04 笔记详情页（核心页面，PRD 05.P03 & P04）

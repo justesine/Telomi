@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 // MARK: - Structured Provider & Model Catalogs (Selection-First, No Raw Fill-in-the-Blank)

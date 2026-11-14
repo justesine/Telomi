@@ -1,6 +1,9 @@
 import Foundation
 
-/// MemoFlow 中英文多语言本地化支持（跟随系统 / 简体中文 / English）
+/// Telomi 中英文多语言本地化支持（跟随系统 / 简体中文 / English）
+public typealias TelomiLocalization = L10n
+public typealias MemoFlowLocalization = L10n
+
 public enum L10n {
     @inlinable
     public static func tr(_ isEnglish: Bool, _ zh: String, _ en: String) -> String {

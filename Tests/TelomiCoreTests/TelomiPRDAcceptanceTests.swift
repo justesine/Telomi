@@ -1,5 +1,5 @@
 import XCTest
-@testable import MemoFlowCore
+@testable import TelomiCore
 
 final class MemoFlowPRDAcceptanceTests: XCTestCase {
 

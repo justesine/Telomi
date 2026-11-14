@@ -272,7 +272,8 @@ public struct MemoFlowPreferences: Codable, Equatable, Sendable {
 /// Keychain 安全存储服务（PRD 9.2: 设备内敏感凭据放 Keychain，不将商业 API Key 明文内置在 App）
 public final class KeychainService: Sendable {
     public static let shared = KeychainService()
-    private let serviceName = "com.esine.MemoFlow.credentials"
+    private let serviceName = "com.esine.Telomi.credentials"
+    private let legacyServiceName = "com.esine.MemoFlow.credentials"
 
     public enum AccountKey: String, Sendable {
         case asrAPIKey = "asr_api_key"
@@ -306,9 +307,21 @@ public final class KeychainService: Sendable {
     }
 
     public func readKey(for account: AccountKey, endpoint: String? = nil) -> String? {
+        if let key = readKeyFromService(serviceName, account: account, endpoint: endpoint) {
+            return key
+        }
+        // 回退读取旧版 MemoFlow credentials，并自动静默迁移至 Telomi
+        if let legacyKey = readKeyFromService(legacyServiceName, account: account, endpoint: endpoint) {
+            saveKey(legacyKey, for: account, endpoint: endpoint)
+            return legacyKey
+        }
+        return nil
+    }
+
+    private func readKeyFromService(_ service: String, account: AccountKey, endpoint: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: credentialAccount(account, endpoint: endpoint),
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne

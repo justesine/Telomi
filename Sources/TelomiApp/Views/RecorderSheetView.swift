@@ -1,6 +1,6 @@
 import SwiftUI
-#if canImport(MemoFlowCore)
-import MemoFlowCore
+#if canImport(TelomiCore)
+import TelomiCore
 #endif
 
 /// P02 录音室级录音弹窗（PRD 05.P02 & R01-R04 & R26）
